@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Kişisel veriler: yalnızca sahibi okuyup yazabilir
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Herkese açık kütüphane: herkes okuyabilir; yalnızca giriş yapmış kişi kendi adına paylaşabilir,
+    // yalnızca paylaşan kişi değiştirip silebilir
+    match /public_shares/{shareId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.kind in ['list', 'exam']
+        && request.resource.data.title is string && request.resource.data.title.size() <= 200;
+      allow update, delete: if request.auth != null && resource.data.ownerUid == request.auth.uid;
+
+      match /chunks/{chunkId} {
+        allow read: if true;
+        allow write: if request.auth != null
+          && get(/databases/$(database)/documents/public_shares/$(shareId)).data.ownerUid == request.auth.uid;
+      }
+    }
+  }
+}

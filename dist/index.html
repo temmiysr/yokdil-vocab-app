@@ -1681,6 +1681,34 @@
       useEffect(() => { persist(STORAGE_KEYS.ACTIVITY, activity); }, [activity]);
 
       // Kelime listesinden sırada bekleyenler: her gün belirlenen sayıda kelime tekrara eklenir (günde bir kez)
+      // Herkese açık paylaşım
+      const [shareReq, setShareReq] = useState(null);       // { kind, title, sourceKey, items, meta }
+      const [libraryKind, setLibraryKind] = useState(null); // null | 'all' | 'list' | 'exam'
+      const shareList = (name) => {
+        const items = cards.filter(c => c.listName === name).sort((a, b) => (a.queueOrder || 0) - (b.queueOrder || 0)).map(cardForShare);
+        if (items.length) setShareReq({ kind: 'list', title: name, sourceKey: 'list:' + name, items, meta: {} });
+      };
+      const shareExam = (ex) => setShareReq({ kind: 'exam', title: ex.title, sourceKey: 'exam:' + ex.id, items: examForShare(ex).questions, meta: { field: ex.field || '', year: ex.year || '', term: ex.term || '' } });
+      const addSharedList = (s, rows) => {
+        const have = new Set(cards.flatMap(c => [String(c.english).toLowerCase(), String(c.lemma || '').toLowerCase()]).filter(Boolean));
+        const now = new Date().toISOString(), today = getTodayStr(), stamp = Date.now();
+        const fresh = rows.filter(r => r && r.english && !have.has(r.english.toLowerCase()) && !(r.lemma && have.has(r.lemma.toLowerCase())));
+        const newCards = fresh.map((r, i) => {
+          const id = 'card_pub_' + stamp + '_' + i;
+          const active = i < 20;
+          return { ...r, id, turkish: r.turkish || '(anlam bulunamadı – düzenleyin)', sourceType: 'public_list', listName: s.title, sharedFrom: s.id,
+            queued: !active, queueOrder: i, isDifficult: false, srs: { ...createSRS(id), nextReviewAt: active ? today : '9999-12-31' }, createdAt: now, updatedAt: now };
+        });
+        if (newCards.length) { setCards(prev => [...prev, ...newCards]); setSettings(st => ({ ...st, listReleaseDay: today })); }
+        showToast('"' + s.title + '": ' + newCards.length + ' yeni kelime eklendi' + (newCards.length > 20 ? ' (20 tanesi bugün tekrarda, kalanlar her gün ' + (settings.dailyListNew == null ? 10 : settings.dailyListNew) + ' tane eklenecek)' : '') + (rows.length - fresh.length ? '; ' + (rows.length - fresh.length) + ' tanesi zaten bankanızdaydı' : '') + '.');
+        return newCards.length;
+      };
+      const addSharedExam = (s, rows) => {
+        const m = s.meta || {};
+        setCustomExams(prev => [{ id: 'exam_' + Date.now(), title: s.title, field: m.field || 'Genel', year: m.year || '', term: m.term || '', questions: rows, uploadedAt: new Date().toISOString(), sharedFrom: s.id }, ...prev]);
+        showToast('"' + s.title + '" denemesi Sınavlarım\'a eklendi (' + rows.length + ' soru).');
+        return rows.length;
+      };
       const [isWordListOpen, setIsWordListOpen] = useState(false);
       const [bankLimit, setBankLimit] = useState(60);
       const [bankQuery, setBankQuery] = useState('');
@@ -2248,6 +2276,8 @@
                     setCustomExams(prev => prev.map(e => e.id === ex.id ? { ...e, attempts: [summary, ...(e.attempts || [])].slice(0, 10), updatedAt: new Date().toISOString() } : e));
                   }}
                   onExtractVocabFromExam={handleExtractVocabFromExam}
+                  onShareExam={shareExam}
+                  onOpenLibrary={() => setLibraryKind('exam')}
                   onAnswer={(type, ok) => logActivity({ examQ: 1, examCorrect: ok ? 1 : 0 }, { [type]: [ok ? 1 : 0, 1] })}
                   prepBest={settings.prepBest || 0}
                   onPrepBest={(n) => setSettings(s => ({ ...s, prepBest: n }))}
@@ -2272,6 +2302,8 @@
                   onUpdateMany={(list) => { const m = new Map(list.map(c => [c.id, c])); setCards(prev => prev.map(c => m.get(c.id) || c)); }}
                   onAudio={() => setAudioOpen(true)}
                   onImportList={() => setIsWordListOpen(true)}
+                  onShareList={shareList}
+                  onOpenLibrary={() => setLibraryKind('list')}
                   onDelete={(id) => {
                     const word = (cards.find(c => c.id === id) || {}).english;
                     setCards(prev => prev.filter(c => c.id !== id));
@@ -2470,6 +2502,16 @@
                            setInitialWord(phrase); setInitialSentence(sentence || ''); setEditingCard(null); setIsVocabModalOpen(true);
                          }}
                          onAnalyze={(s) => { setWordPop(null); setSentenceToAnalyze(s); }} />
+          )}
+
+          {/* Herkese açık paylaşım ve kütüphane */}
+          {shareReq && (
+            <ShareModal req={shareReq} user={sync.user} onSignIn={sync.signIn} onClose={() => setShareReq(null)}
+              onDone={(title) => { setShareReq(null); showToast('"' + title + '" herkese açık kütüphaneye eklendi.'); }} />
+          )}
+          {libraryKind && (
+            <PublicLibraryModal user={sync.user} initialKind={libraryKind} onClose={() => setLibraryKind(null)}
+              onAddList={addSharedList} onAddExam={addSharedExam} />
           )}
 
           {/* Kelime listesi PDF içe aktarma */}
@@ -3891,7 +3933,7 @@
       );
     }
 
-    function ExamSection({ cards, readings, customExams = [], onOpenUploadExam, onDeleteExam, onUpdateExam, onExamFinished, onExtractVocabFromExam, onMarkDifficult, onAnswer, prepBest, onPrepBest, preset, onPresetUsed, onCheckupDone }) {
+    function ExamSection({ cards, readings, customExams = [], onOpenUploadExam, onDeleteExam, onUpdateExam, onExamFinished, onExtractVocabFromExam, onShareExam, onOpenLibrary, onMarkDifficult, onAnswer, prepBest, onPrepBest, preset, onPresetUsed, onCheckupDone }) {
       const [examTab, setExamTab] = useState('generator'); // 'generator' | 'uploaded'
       const [mode, setMode] = useState('mixed');
       const [count, setCount] = useState(10);
@@ -4021,6 +4063,11 @@
               >
                 <span>+ Çıkmış Sınav / Deneme PDF'i Yükle</span>
               </button>
+              {onOpenLibrary && (
+                <button type="button" onClick={onOpenLibrary} className="px-3.5 py-1.5 rounded-xl bg-sky-700 hover:bg-sky-600 text-xs font-bold text-white shadow">
+                  🌐 Paylaşılan denemeler
+                </button>
+              )}
             </div>
 
             {examTab === 'uploaded' ? (
@@ -4067,6 +4114,12 @@
                                 title="Sınavdaki hedef kelimeleri kelime bankanıza aktarır"
                               >
                                 ✨ Kelimeleri Bankaya Ekle
+                              </button>
+                            )}
+                            {onShareExam && (
+                              <button type="button" onClick={() => onShareExam(ex)} title="Herkese açık kütüphanede paylaş"
+                                className="px-2.5 py-1.5 rounded-lg bg-sky-950/70 border border-sky-800 text-sky-300 hover:bg-sky-900 text-xs font-bold">
+                                🌐 Paylaş
                               </button>
                             )}
                             {onDeleteExam && (
@@ -4766,6 +4819,192 @@
       return { english, lemma, turkish, trFull: trAll, pos, ipa, okunus: e.okunus || (ipa ? ipaToTurkish(ipa) : ''), hyphenation: hece, no: e.no };
     }
 
+    // --- HERKESE AÇIK KÜTÜPHANE ---
+    // Kullanıcı seçtiği kelime listesini ya da denemeyi paylaşır: public_shares/{id} (başlık, sayı, sahibi)
+    // + public_shares/{id}/chunks/{n} (içerik, 1 MB belge sınırı için parçalara bölünmüş JSON).
+    // Herkes okuyabilir; yalnızca paylaşan kişi değiştirip silebilir. Kişisel tekrar geçmişi paylaşılmaz.
+    const PUBLIC_COL = 'public_shares';
+    const cardForShare = (c) => {
+      const o = {
+        english: c.english, lemma: c.lemma || '', turkish: isMissingMeaning(c) ? '' : (c.turkish || ''),
+        partOfSpeech: c.partOfSpeech || '', ipa: c.ipa || '', okunus: c.okunus || '',
+        hyphenation: c.hyphenation || '', definition: c.definition || '',
+        examples: (c.examples || []).slice(0, 2), synonyms: (c.synonyms || []).slice(0, 6), antonyms: (c.antonyms || []).slice(0, 5),
+        questionType: c.questionType || '', listNo: c.listNo || null,
+      };
+      if (c.examInfo && c.examInfo.verified) o.examInfo = { title: c.examInfo.title || '', year: c.examInfo.year || '', field: c.examInfo.field || '', verified: true };
+      return o;
+    };
+    const examForShare = (ex) => ({
+      title: ex.title, field: ex.field || '', year: ex.year || '', term: ex.term || '',
+      questions: (ex.questions || []).map(q => ({ num: q.num, prompt: q.prompt, options: q.options, answer: q.answer, correctLetter: q.correctLetter || '', category: q.category || '', ...(q.passage ? { passage: q.passage } : {}) })),
+    });
+    const publicError = (e) => {
+      const code = e && e.code;
+      if (code === 'permission-denied') return 'Herkese açık kütüphaneye erişim izni yok. Firebase\'de Firestore kurallarının güncellenmesi gerekiyor.';
+      if (code === 'unavailable') return 'Sunucuya bağlanılamadı (internet bağlantısını kontrol edin).';
+      return (e && e.message) || 'Bilinmeyen hata';
+    };
+    async function publishShare(user, { kind, title, note, sourceKey, items, meta }) {
+      const fb = getFirebase();
+      if (!fb) throw new Error('Firebase yüklenemedi.');
+      const col = fb.db.collection(PUBLIC_COL);
+      // Aynı kaynağı daha önce paylaştıysa eskisini kaldır (güncelleme)
+      const old = await col.where('ownerUid', '==', user.uid).where('sourceKey', '==', sourceKey).get();
+      for (const d of old.docs) await deleteShare(d.id);
+      const per = kind === 'exam' ? 40 : 400;
+      const chunks = [];
+      for (let i = 0; i < items.length; i += per) chunks.push(JSON.stringify(items.slice(i, i + per)));
+      const ref = col.doc();
+      await ref.set({ kind, title, note: note || '', sourceKey, ownerUid: user.uid, count: items.length, chunks: chunks.length, meta: meta || {}, createdAt: Date.now() });
+      for (let i = 0; i < chunks.length; i += 20) {
+        const batch = fb.db.batch();
+        chunks.slice(i, i + 20).forEach((json, k) => batch.set(ref.collection('chunks').doc(String(i + k)), { json }));
+        await batch.commit();
+      }
+      return ref.id;
+    }
+    async function loadShare(id) {
+      const fb = getFirebase();
+      if (!fb) throw new Error('Firebase yüklenemedi.');
+      const snap = await fb.db.collection(PUBLIC_COL).doc(id).collection('chunks').get();
+      return snap.docs.sort((a, b) => +a.id - +b.id).flatMap(d => JSON.parse(d.data().json || '[]'));
+    }
+    async function deleteShare(id) {
+      const fb = getFirebase();
+      const ref = fb.db.collection(PUBLIC_COL).doc(id);
+      const snap = await ref.collection('chunks').get();
+      for (const d of snap.docs) await d.ref.delete();
+      await ref.delete();
+    }
+
+    // Paylaşma penceresi
+    function ShareModal({ req, user, onSignIn, onClose, onDone }) {
+      const [title, setTitle] = useState(req.title);
+      const [note, setNote] = useState('');
+      const [ok, setOk] = useState(false);
+      const [busy, setBusy] = useState(false);
+      const [err, setErr] = useState('');
+      const go = async () => {
+        setBusy(true); setErr('');
+        try { await publishShare(user, { ...req, title: title.trim() || req.title, note: note.trim() }); onDone(title.trim() || req.title); }
+        catch (e) { setErr(publicError(e)); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-3">
+            <h3 className="font-bold text-base text-white">🌐 Herkese açık paylaş</h3>
+            <p className="text-xs text-slate-400">{req.kind === 'exam' ? req.items.length + ' soruluk deneme' : req.items.length + ' kelimelik liste'} herkese açık kütüphaneye eklenir. Siteyi açan herkes görebilir ve kendi bankasına ekleyebilir. Adınız ve e-postanız gösterilmez; kendi tekrar geçmişiniz ve cevaplarınız paylaşılmaz. İstediğiniz zaman kütüphaneden kaldırabilirsiniz.</p>
+            <label className="block text-[11px] text-slate-400">Başlık
+              <input value={title} onChange={e => setTitle(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white" />
+            </label>
+            <label className="block text-[11px] text-slate-400">Not (isteğe bağlı; kaynak adı gibi)
+              <input value={note} onChange={e => setNote(e.target.value)} placeholder="Örn: Kaynak: Zafer Hoca Dil Akademisi (zaferhoca.com.tr)" className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white" />
+            </label>
+            <label className="flex items-start gap-2 text-[11px] text-slate-300">
+              <input type="checkbox" checked={ok} onChange={e => setOk(e.target.checked)} className="mt-0.5 accent-blue-500" />
+              <span>Bu içeriği paylaşma hakkım var. (Kendi hazırladıklarım ya da paylaşılmasına izin verilen kaynaklar; ÖSYM çıkmış soruları ve izin vermeyen yayınların içerikleri paylaşılmaz.)</span>
+            </label>
+            {err && <p className="text-[11px] text-red-300">⚠ {err}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              {user
+                ? <button disabled={!ok || busy} onClick={go} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white disabled:opacity-50">{busy ? 'Paylaşılıyor…' : 'Paylaş'}</button>
+                : <button onClick={onSignIn} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Paylaşmak için Google ile giriş yap</button>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Herkese açık kütüphane: paylaşılan listeler ve denemeler
+    function PublicLibraryModal({ user, initialKind, onClose, onAddList, onAddExam }) {
+      const [items, setItems] = useState(null);
+      const [err, setErr] = useState('');
+      const [kind, setKind] = useState(initialKind || 'all');
+      const [busyId, setBusyId] = useState('');
+      const [preview, setPreview] = useState(null);     // { id, rows }
+      const [done, setDone] = useState({});
+      const load = async () => {
+        setErr('');
+        try {
+          const fb = getFirebase();
+          if (!fb) throw new Error('Firebase yüklenemedi.');
+          const snap = await fb.db.collection(PUBLIC_COL).orderBy('createdAt', 'desc').limit(100).get();
+          setItems(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        } catch (e) { setErr(publicError(e)); setItems([]); }
+      };
+      useEffect(() => { load(); }, []);
+      const add = async (s) => {
+        setBusyId(s.id);
+        try {
+          const rows = await loadShare(s.id);
+          const n = s.kind === 'exam' ? onAddExam(s, rows) : onAddList(s, rows);
+          setDone(d => ({ ...d, [s.id]: n }));
+        } catch (e) { setErr(publicError(e)); }
+        finally { setBusyId(''); }
+      };
+      const showPreview = async (s) => {
+        if (preview && preview.id === s.id) { setPreview(null); return; }
+        setBusyId(s.id);
+        try { setPreview({ id: s.id, rows: (await loadShare(s.id)).slice(0, 8) }); } catch (e) { setErr(publicError(e)); }
+        finally { setBusyId(''); }
+      };
+      const remove = async (s) => {
+        if (!window.confirm('"' + s.title + '" herkese açık kütüphaneden kaldırılsın mı? (Kendi bankanızdaki kopyanız silinmez.)')) return;
+        setBusyId(s.id);
+        try { await deleteShare(s.id); setItems(prev => prev.filter(x => x.id !== s.id)); } catch (e) { setErr(publicError(e)); }
+        finally { setBusyId(''); }
+      };
+      const shown = (items || []).filter(s => kind === 'all' || s.kind === kind);
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl w-full space-y-3 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="font-bold text-base text-white">🌐 Herkese Açık Kütüphane</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Kullanıcıların paylaştığı kelime listeleri ve denemeler. Eklediğiniz içerik kendi bankanıza kopyalanır.</p>
+              </div>
+              <button onClick={onClose} className="text-slate-400 hover:text-white text-sm">✕</button>
+            </div>
+            <div className="flex gap-1.5 text-xs">
+              {[['all', 'Tümü'], ['list', '📚 Kelime listeleri'], ['exam', '📄 Denemeler']].map(([k, l]) => (
+                <button key={k} onClick={() => setKind(k)} className={"px-3 py-1.5 rounded-lg font-bold " + (kind === k ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{l}</button>
+              ))}
+            </div>
+            {err && <p className="text-xs text-red-300">⚠ {err}</p>}
+            {items === null && <p className="text-xs text-slate-500">Yükleniyor…</p>}
+            {items && !shown.length && !err && <p className="text-xs text-slate-500">Henüz paylaşılan içerik yok. Kelime Kartları'nda bir liste seçip ya da bir denemenin kartında "🌐 Paylaş" ile ilk paylaşımı siz yapabilirsiniz.</p>}
+            {shown.map(s => (
+              <div key={s.id} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-lg">{s.kind === 'exam' ? '📄' : '📚'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-white truncate">{s.title}</p>
+                    <p className="text-[11px] text-slate-500">{s.count} {s.kind === 'exam' ? 'soru' : 'kelime'}{s.meta && s.meta.field ? ' · ' + s.meta.field : ''} · {new Date(s.createdAt).toLocaleDateString('tr-TR')}{user && s.ownerUid === user.uid ? ' · sizin paylaşımınız' : ''}</p>
+                    {s.note && <p className="text-[11px] text-slate-400">{s.note}</p>}
+                  </div>
+                  <button onClick={() => showPreview(s)} disabled={busyId === s.id} className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-[11px] font-bold text-slate-200">Önizle</button>
+                  {done[s.id] != null
+                    ? <span className="text-[11px] font-bold text-emerald-400">✓ {done[s.id]} eklendi</span>
+                    : <button onClick={() => add(s)} disabled={busyId === s.id} className="px-2.5 py-1.5 rounded-lg bg-blue-600 text-[11px] font-bold text-white disabled:opacity-50">{busyId === s.id ? '…' : 'Bankama ekle'}</button>}
+                  {user && s.ownerUid === user.uid && <button onClick={() => remove(s)} disabled={busyId === s.id} title="Kütüphaneden kaldır" className="px-2 py-1.5 rounded-lg text-[11px] text-red-400 hover:bg-red-950">🗑</button>}
+                </div>
+                {preview && preview.id === s.id && (
+                  <div className="text-[11px] text-slate-400 space-y-0.5 border-t border-slate-800 pt-1.5">
+                    {preview.rows.map((r, i) => s.kind === 'exam'
+                      ? <p key={i} className="truncate">{r.num}. {r.prompt || '(parça sorusu)'}</p>
+                      : <p key={i} className="truncate"><b className="text-white">{r.english}</b> → <span className="text-blue-300">{r.turkish}</span></p>)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
     // Kelime listesi PDF'lerini içe aktarma penceresi
     function WordListImportModal({ cards, onClose, onImport }) {
       const [files, setFiles] = useState([]);          // [{ name, listName, entries, error }]
@@ -4914,7 +5153,7 @@
     }
 
     // Kelime Kartları bölümü: çevrilebilir kartlar, Tureng bağlantısı ve kart üzerinde anlam düzenleme
-    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete, onAudio, onImportList }) {
+    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete, onAudio, onImportList, onShareList, onOpenLibrary }) {
       const [query, setQuery] = useState('');
       const [autoFill, setAutoFill] = useState(null);     // { done, total } otomatik anlam bulma sürerken
       const [refreshingId, setRefreshingId] = useState(null);
@@ -5019,6 +5258,8 @@
               <option value="genel">Genel Akademik</option>
             </select>
             {onImportList && <button onClick={onImportList} className="px-3 py-1.5 rounded-lg bg-emerald-700 text-xs font-bold text-white">📥 Liste içe aktar (PDF)</button>}
+            {onOpenLibrary && <button onClick={onOpenLibrary} className="px-3 py-1.5 rounded-lg bg-sky-700 text-xs font-bold text-white">🌐 Paylaşılan listeler</button>}
+            {onShareList && filter.startsWith('l:') && <button onClick={() => onShareList(filter.slice(2))} className="px-3 py-1.5 rounded-lg bg-sky-900 border border-sky-700 text-xs font-bold text-sky-200">🌐 Bu listeyi paylaş</button>}
             {onAudio && <button onClick={onAudio} disabled={!cards.length} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-xs font-bold text-white disabled:opacity-40">🎧 Dinleyerek çalış</button>}
             <button onClick={shuffle} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">🔀 Karıştır</button>
             <button
