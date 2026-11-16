@@ -59,13 +59,29 @@
   </style>
 </head>
 <body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans select-text overflow-hidden">
-  <div id="root"></div>
+  <div id="root">
+    <div style="display:flex;height:100vh;align-items:center;justify-content:center;background:#0f172a;color:#94a3b8;font-family:sans-serif;text-align:center;padding:20px;">
+      <div>
+        <div style="width:48px;height:48px;border:4px solid #3b82f6;border-top-color:transparent;border-radius:50%;margin:0 auto 16px;animation:spin 1s linear infinite;"></div>
+        <h2 style="color:#ffffff;font-size:18px;font-weight:700;margin-bottom:8px;">YÖKDİL Master Yükleniyor...</h2>
+        <p style="font-size:12px;color:#64748b;">Kişisel çalışma masanız hazırlanıyor.</p>
+      </div>
+    </div>
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+  </div>
 
-  <!-- React 18, ReactDOM 18 & Babel Standalone for direct browser execution -->
-  <!-- Sürümler sabit: kütüphaneler güncellenince site habersizce bozulmasın -->
-  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
+  <!-- React 18, ReactDOM 18 & Babel Standalone (Cloudflare CDN - Türkiye'de yüksek hızlı ve kesintisiz) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js" crossorigin="anonymous"></script>
+  <!-- Fallback CDN (jsdelivr) if Cloudflare is blocked by local network -->
+  <script>
+    if (!window.React) {
+      document.write('<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"><\/script>');
+      document.write('<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"><\/script>');
+      document.write('<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.26.4/babel.min.js"><\/script>');
+    }
+  </script>
 
   <!-- Standalone Browser App -->
   <script type="text/babel">
@@ -77,6 +93,7 @@
       READINGS: 'yokdil_readings_v1',
       VOCAB: 'yokdil_vocab_cards_v1',
       SETTINGS: 'yokdil_user_settings_v1',
+      ACTIVITY: 'yokdil_activity_v1',      // günlük çalışma kaydı: [{ id: 'YYYY-MM-DD', reviews, correct, again, newCards, examQ, examCorrect, examByType }]
     };
 
     function getStored(key, def) {
@@ -134,7 +151,7 @@
     const isQuotaError = (e) => !!e && (e.name === 'QuotaExceededError' || e.code === 22 || /quota/i.test(e.message || ''));
 
     // Açılışta tüm veriyi yükler (gerekirse localStorage → IndexedDB taşıması yapar)
-    const DATA_KEYS = [STORAGE_KEYS.WEEKS, STORAGE_KEYS.READINGS, STORAGE_KEYS.VOCAB, STORAGE_KEYS.SETTINGS];
+    const DATA_KEYS = [STORAGE_KEYS.WEEKS, STORAGE_KEYS.READINGS, STORAGE_KEYS.VOCAB, STORAGE_KEYS.SETTINGS, STORAGE_KEYS.ACTIVITY];
     async function loadAllData() {
       const fromLocal = () => Object.fromEntries(DATA_KEYS.map(k => [k, getStored(k, undefined)]));
       try {
@@ -199,57 +216,67 @@
       };
     }
 
-    function processReview(item, rating) {
-      const today = getTodayStr();
-      let rep = item.repetitions;
-      let ease = item.easeFactor;
-      let interval = item.interval;
-      let lapses = item.lapses;
-      let state = item.state;
+    // --- FSRS (Free Spaced Repetition Scheduler, v4.5 varsayılan ağırlıklar) ---
+    // Her kart için hafıza "dayanıklılığı" (stability, gün) ve "zorluk" (difficulty, 1-10) tutulur.
+    // Kart, hatırlama olasılığı hedefin (%90) altına düşeceği gün tekrar sorulur.
+    // Eski SM-2 kartları ilk tekrarda kendi aralık/kolaylık değerlerinden FSRS'ye çevrilir (geçmiş kaybolmaz).
+    const FSRS_W = [0.4872, 1.4003, 3.7145, 13.8206, 5.1618, 1.2298, 0.8975, 0.031, 1.6474, 0.1367, 1.0461, 2.1072, 0.0793, 0.3246, 1.587, 0.2272, 2.8755];
+    const FSRS_RETENTION = 0.9, FSRS_DECAY = -0.5, FSRS_FACTOR = 19 / 81;
+    const clampN = (x, a, b) => Math.min(b, Math.max(a, x));
+    const fsrsInitD = (g) => clampN(FSRS_W[4] - (g - 3) * FSRS_W[5], 1, 10);
+    const fsrsRetr = (days, s) => Math.pow(1 + FSRS_FACTOR * days / s, FSRS_DECAY);
+    const fsrsInterval = (s) => clampN(Math.round(s / FSRS_FACTOR * (Math.pow(FSRS_RETENTION, 1 / FSRS_DECAY) - 1)), 1, 36500);
+    const daysBetween = (a, b) => Math.max(0, Math.round((Date.parse(b) - Date.parse(a)) / 86400000));
 
-      if (rating === 1) {
-        rep = 0;
-        interval = 1;
-        ease = Math.max(1.3, ease - 0.2);
-        lapses += 1;
-        state = 'learning';
+    function fsrsNext(item, rating) {
+      const g = rating, w = FSRS_W;
+      const today = getTodayStr();
+      let S = item.stability, D = item.difficulty;
+      const reviewed = item.repetitions > 0 || (item.state && item.state !== 'new');
+      if (!(S > 0) && reviewed) {
+        // SM-2 kartını çevir: dayanıklılık ≈ mevcut aralık, zorluk ≈ kolaylık katsayısından
+        S = Math.max(0.5, item.interval || 1);
+        D = clampN(11 - ((item.easeFactor || 2.5) - 1.3) * 5, 1, 10);
+      }
+      let lapses = item.lapses || 0;
+      if (!(S > 0)) {
+        S = w[g - 1];
+        D = fsrsInitD(g);
+        if (g === 1) lapses += 1;
       } else {
-        if (rep === 0) {
-          interval = rating === 4 ? 3 : 1;
-          if (rating === 4) ease = Math.min(3.0, ease + 0.15);
-          if (rating === 2) ease = Math.max(1.3, ease - 0.15);
-          rep = 1;
-          state = 'learning';
-        } else if (rep === 1) {
-          interval = rating === 4 ? 6 : (rating === 2 ? 2 : 3);
-          rep = 2;
-          state = 'learning';
-        } else if (rep === 2) {
-          interval = rating === 4 ? 12 : (rating === 2 ? 4 : 7);
-          rep = 3;
-          state = 'review';
+        const elapsed = item.lastReviewedAt ? daysBetween(item.lastReviewedAt.slice(0, 10), today) : (item.interval || 0);
+        const R = fsrsRetr(elapsed, S);
+        const D1 = D - w[6] * (g - 3);
+        D = clampN(w[7] * fsrsInitD(4) + (1 - w[7]) * D1, 1, 10);
+        if (g === 1) {
+          S = Math.min(S, w[11] * Math.pow(D, -w[12]) * (Math.pow(S + 1, w[13]) - 1) * Math.exp(w[14] * (1 - R)));
+          lapses += 1;
+        } else if (elapsed < 1) {
+          // aynı gün tekrar: dayanıklılık değişmez (kolayda hafif artış)
+          if (g === 4) S = S * 1.2;
         } else {
-          let mod = rating === 2 ? 0.8 : (rating === 4 ? 1.3 : 1.0);
-          if (rating === 2) ease = Math.max(1.3, ease - 0.15);
-          if (rating === 4) ease = Math.min(3.0, ease + 0.15);
-          interval = Math.max(interval + 1, Math.round(interval * ease * mod));
-          rep += 1;
-          state = interval >= 30 ? 'mastered' : 'review';
+          const hard = g === 2 ? w[15] : 1, easy = g === 4 ? w[16] : 1;
+          S = S * (Math.exp(w[8]) * (11 - D) * Math.pow(S, -w[9]) * (Math.exp(w[10] * (1 - R)) - 1) * hard * easy + 1);
         }
       }
-
-      ease = Math.round(ease * 100) / 100;
+      const interval = g === 1 ? 1 : fsrsInterval(S);
       return {
         ...item,
-        state,
+        stability: Math.round(S * 1000) / 1000,
+        difficulty: Math.round(D * 1000) / 1000,
+        state: g === 1 ? 'learning' : interval >= 30 ? 'mastered' : interval >= 7 ? 'review' : 'learning',
         interval,
-        easeFactor: ease,
-        repetitions: rep,
+        repetitions: (item.repetitions || 0) + 1,
         lapses,
         lastReviewedAt: new Date().toISOString(),
         nextReviewAt: addDays(today, interval),
       };
     }
+
+    function processReview(item, rating) { return fsrsNext(item, rating); }
+
+    // Düğmelerde gösterilecek sonraki aralık ("3 gün", "2 ay")
+    const formatInterval = (d) => d < 30 ? d + ' gün' : d < 365 ? Math.round(d / 30) + ' ay' : (Math.round(d / 36.5) / 10) + ' yıl';
 
     // --- TELAFFUZ (SpeechSynthesis) ---
     function speakText(text) {
@@ -305,10 +332,16 @@
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
     // Hata/hız sınırına karşı tekrar denemeli JSON isteği (404 → null)
+    // cache:'no-store' → tarayıcı önbelleği kullanılmaz. Datamuse gibi servisler CORS izin başlığını tek bir adrese göre
+    // önbelleğe yazdırıyor; aynı tarayıcıda başka adresten (localhost ↔ github.io) açınca istekler engelleniyordu.
+    // Sonuçlar zaten uygulamanın kendi önbelleğinde (freq/dict cache) tutuluyor.
+    // Datamuse'un sunucu önbelleği izin başlığını adres ayırt etmeden 24 saat saklıyor; adrese özel parametre ile ayrı önbellek
+    const ORIGIN_TAG = (() => { try { return btoa(location.origin).replace(/[^a-z0-9]/gi, '').slice(-12); } catch (e) { return 'x'; } })();
     const fetchJson = async (url, tries = 3) => {
+      if (/api\.datamuse\.com/.test(url)) url += (url.includes('?') ? '&' : '?') + 'o=' + ORIGIN_TAG;
       for (let a = 0; a < tries; a++) {
         try {
-          const r = await fetch(url);
+          const r = await fetch(url, { cache: 'no-store' });
           if (r.status === 404) return null;
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return await r.json();
@@ -653,7 +686,7 @@
       appId: '1:294443630442:web:7ef2849a41c5d6e4b72f13',
     };
     // Eşitlenen veri türleri (Ayarlar bilerek dahil değil: Telegram token'ı gibi gizli bilgiler buluta gitmez)
-    const SYNC_KINDS = ['weeks', 'readings', 'cards'];
+    const SYNC_KINDS = ['weeks', 'readings', 'cards', 'activity'];
     const SYNC_TS_KEY = 'yokdil_sync_ts_v1';            // { kind: { id: son yerel değişiklik zamanı } }
     // Firestore'da bir belge en fazla 1 MB olabilir; daha büyük öğe toplu gönderimi tümden bozar → atlanır (cihazda kalır)
     const SYNC_MAX_BYTES = 900000;
@@ -674,17 +707,17 @@
 
     // Firestore'da her öğe tek belge: users/{uid}/{kind}/{id} = { json, ts, deleted }
     // (json olarak saklanır: undefined/iç içe alanlar sorun çıkarmaz; silinenler "deleted" işaretiyle tutulur ki diğer cihazlar da silsin)
-    function useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards }) {
+    function useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity }) {
       const [user, setUser] = useState(null);
       const [authReady, setAuthReady] = useState(false);
       const [status, setStatus] = useState('off');      // off | syncing | synced | error
       const [error, setError] = useState('');
       const [lastSync, setLastSync] = useState(null);
       const [tooBig, setTooBig] = useState([]);          // buluta sığmadığı için yalnızca bu cihazda kalan öğeler
-      const data = { weeks, readings, cards };
-      const setters = { weeks: setWeeks, readings: setReadings, cards: setCards };
+      const data = { weeks, readings, cards, activity };
+      const setters = { weeks: setWeeks, readings: setReadings, cards: setCards, activity: setActivity };
       const dataRef = useRef(data); dataRef.current = data;
-      const synced = useRef({ weeks: new Map(), readings: new Map(), cards: new Map() });   // buluttaki bilinen hâl (id → json)
+      const synced = useRef({ weeks: new Map(), readings: new Map(), cards: new Map(), activity: new Map() });   // buluttaki bilinen hâl (id → json)
       const ready = useRef(false);
       const seen = useRef(null);                         // değişiklik zamanı damgası için önceki yerel hâl
 
@@ -693,7 +726,7 @@
 
       // Yerel değişikliklere zaman damgası (giriş yapılmamışken de): ilk girişte hangi sürümün yeni olduğunu bilmek için
       useEffect(() => {
-        const cur = { weeks: toMap(weeks), readings: toMap(readings), cards: toMap(cards) };
+        const cur = { weeks: toMap(weeks), readings: toMap(readings), cards: toMap(cards), activity: toMap(activity) };
         if (seen.current) {
           const all = tsAll(); const now = Date.now(); let changed = false;
           SYNC_KINDS.forEach(k => {
@@ -703,7 +736,7 @@
           if (changed) { try { localStorage.setItem(SYNC_TS_KEY, JSON.stringify(all)); } catch (e) {} }
         }
         seen.current = cur;
-      }, [weeks, readings, cards]);
+      }, [weeks, readings, cards, activity]);
 
       // Oturum durumu
       useEffect(() => {
@@ -831,7 +864,7 @@
           }
         }, 1200);
         return () => clearTimeout(t);
-      }, [weeks, readings, cards, user]);
+      }, [weeks, readings, cards, activity, user]);
 
       const signIn = async () => {
         const fb = getFirebase();
@@ -914,8 +947,27 @@
       const [readings, setReadings] = useState(() => initial[STORAGE_KEYS.READINGS] || []);
       const [cards, setCards] = useState(() => initial[STORAGE_KEYS.VOCAB] || []);
       const [storageWarning, setStorageWarning] = useState('');
-      // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler ve kartlar tüm cihazlarda aynı olur)
-      const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards });
+      const [activity, setActivity] = useState(() => initial[STORAGE_KEYS.ACTIVITY] || []);
+      // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler, kartlar ve çalışma kaydı tüm cihazlarda aynı olur)
+      const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity });
+
+      // Günlük çalışma kaydına ekle: logActivity({ reviews: 1, correct: 1 })
+      const logActivity = (patch, byType) => {
+        const day = getTodayStr();
+        setActivity(prev => {
+          const cur = prev.find(a => a.id === day) || { id: day, reviews: 0, correct: 0, again: 0, newCards: 0, examQ: 0, examCorrect: 0, examByType: {} };
+          const next = { ...cur };
+          Object.entries(patch).forEach(([k, v]) => { next[k] = (next[k] || 0) + v; });
+          if (byType) {
+            next.examByType = { ...(cur.examByType || {}) };
+            Object.entries(byType).forEach(([t, [c, n]]) => {
+              const p = next.examByType[t] || [0, 0];
+              next.examByType[t] = [p[0] + c, p[1] + n];
+            });
+          }
+          return [next, ...prev.filter(a => a.id !== day)].slice(0, 400);
+        });
+      };
 
       // --- Yedek indir / yükle ---
       const exportBackup = () => {
@@ -997,6 +1049,10 @@
 
       // --- Tıkla-anlam: okuma ekranında tek tıkla kelimenin anlamı ---
       const [wordPop, setWordPop] = useState(null);       // { word, sentence, x, y, top, readingId }
+      const [awlHighlight, setAwlHighlight] = useState(false);
+      const [sentenceToAnalyze, setSentenceToAnalyze] = useState(null);
+      const [audioOpen, setAudioOpen] = useState(false);
+      const [moreOpen, setMoreOpen] = useState(false);
       const handleWordClick = (e, reading) => {
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;   // seçim yapılıyorsa eski akış
@@ -1087,10 +1143,17 @@
       };
       useEffect(() => { persist(STORAGE_KEYS.VOCAB, cards); }, [cards]);
       useEffect(() => { persist(STORAGE_KEYS.SETTINGS, settings); }, [settings]);
+      useEffect(() => { persist(STORAGE_KEYS.ACTIVITY, activity); }, [activity]);
 
       // Hesaplamalar
       const today = getTodayStr();
       const dueCards = cards.filter(c => c.srs.nextReviewAt <= today);
+      // Zorlandığım kelimeleri tarih beklemeden tekrar etmek için (null = normal günlük tekrar)
+      const [extraReviewIds, setExtraReviewIds] = useState(null);
+      const reviewCards = extraReviewIds ? cards.filter(c => extraReviewIds.includes(c.id)) : dueCards;
+      const streakNow = computeStreak(activity);
+      const todayRec = activity.find(a => a.id === today) || {};
+      const examLeft = daysUntil(settings.examDate);
       const difficultCards = cards.filter(c => c.isDifficult || c.srs.lapses >= 3);
       const masteredCards = cards.filter(c => c.srs.state === 'mastered');
 
@@ -1149,8 +1212,60 @@
         alert('Mevcut karta yeni örnek cümle ve kaynak başarıyla eklendi!');
       };
 
+      // Menü öğeleri (masaüstü yan menü + telefon alt menüsü ortak)
+      const navItems = [
+        { id: 'dashboard', label: 'Ana Sayfa', short: 'Ana', icon: '📊' },
+        { id: 'daily-review', label: 'Günlük Tekrar', short: 'Tekrar', icon: '🔄', badge: dueCards.length },
+        { id: 'weeks', label: 'Haftalık Listelerim', icon: '📅' },
+        { id: 'readings', label: 'Okuma Parçalarım', short: 'Metinler', icon: '📖' },
+        { id: 'bank', label: 'YÖKDİL Kelime Bankası', icon: '🗄️' },
+        { id: 'flashcards', label: 'Kelime Kartları', short: 'Kartlar', icon: '🃏', badge: cards.filter(isMissingMeaning).length },
+        { id: 'study', label: 'Sınavlar & Testler', short: 'Sınav', icon: '🎓' },
+        { id: 'difficult', label: 'Zorlandığım Kelimeler', icon: '⚠️', badge: difficultCards.length },
+        { id: 'stats', label: 'İstatistikler', icon: '📈' },
+        { id: 'settings', label: 'Ayarlar', icon: '⚙️' },
+      ];
+      const MOBILE_MAIN = ['dashboard', 'daily-review', 'readings', 'flashcards', 'study'];
+      const goTab = (id) => {
+        setActiveTab(id);
+        setMoreOpen(false);
+        if (id !== 'weeks') setSelectedWeekId(null);
+        if (id !== 'readings') setSelectedReadingId(null);
+        if (id !== 'daily-review') setExtraReviewIds(null);
+      };
+
       return (
         <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 font-sans">
+          {/* Telefon: alt menü */}
+          <nav className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-slate-950/95 backdrop-blur border-t border-slate-800 flex safe-area-bottom" aria-label="Ana menü">
+            {navItems.filter(n => MOBILE_MAIN.includes(n.id)).map(item => (
+              <button key={item.id} onClick={() => goTab(item.id)} aria-current={activeTab === item.id ? 'page' : undefined}
+                      className={"relative flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-semibold " + (activeTab === item.id ? 'text-blue-400' : 'text-slate-400')}>
+                <span className="text-lg leading-none">{item.icon}</span>{item.short}
+                {item.badge > 0 && <span className="absolute top-1 right-1/4 text-[9px] bg-blue-600 text-white px-1.5 rounded-full font-black">{item.badge}</span>}
+              </button>
+            ))}
+            <button onClick={() => setMoreOpen(true)} className={"flex-1 flex flex-col items-center gap-0.5 py-2 text-[10px] font-semibold " + (!MOBILE_MAIN.includes(activeTab) ? 'text-blue-400' : 'text-slate-400')}>
+              <span className="text-lg leading-none">☰</span>Daha
+            </button>
+          </nav>
+          {moreOpen && (
+            <div className="md:hidden fixed inset-0 z-50 bg-black/60" onClick={() => setMoreOpen(false)}>
+              <div className="absolute bottom-0 inset-x-0 bg-slate-950 border-t border-slate-800 rounded-t-3xl p-4 space-y-2 max-h-[85vh] overflow-y-auto safe-area-bottom" onClick={e => e.stopPropagation()}>
+                <div className="w-10 h-1 rounded bg-slate-700 mx-auto mb-2" />
+                <div className="grid grid-cols-2 gap-2">
+                  {navItems.filter(n => !MOBILE_MAIN.includes(n.id)).map(item => (
+                    <button key={item.id} onClick={() => goTab(item.id)} className={"flex items-center gap-2 px-3 py-3 rounded-xl text-xs font-semibold " + (activeTab === item.id ? 'bg-blue-600 text-white' : 'bg-slate-900 text-slate-200')}>
+                      <span>{item.icon}</span>{item.label}
+                      {item.badge > 0 && <span className="ml-auto text-[10px] bg-white text-blue-700 px-1.5 rounded-full font-black">{item.badge}</span>}
+                    </button>
+                  ))}
+                </div>
+                <SyncPanel sync={sync} backup={{ onExport: exportBackup, onImport: importBackup }} />
+              </div>
+            </div>
+          )}
+
           {/* Masaüstü Yan Menü */}
           <aside className="hidden md:flex flex-col w-64 bg-slate-950 border-r border-slate-800 p-4 select-none">
             <div className="flex items-center gap-3 pb-5 border-b border-slate-800">
@@ -1167,25 +1282,10 @@
             </div>
 
             <nav className="flex-1 py-4 space-y-1">
-              {[
-                { id: 'dashboard', label: 'Ana Sayfa', icon: '📊' },
-                { id: 'daily-review', label: 'Günlük Tekrar', icon: '🔄', badge: dueCards.length },
-                { id: 'weeks', label: 'Haftalık Listelerim', icon: '📅' },
-                { id: 'readings', label: 'Okuma Parçalarım', icon: '📖' },
-                { id: 'bank', label: 'YÖKDİL Kelime Bankası', icon: '🗄️' },
-                { id: 'flashcards', label: 'Kelime Kartları', icon: '🃏', badge: cards.filter(isMissingMeaning).length },
-                { id: 'study', label: 'Sınavlar & Testler', icon: '🎓' },
-                { id: 'difficult', label: 'Zorlandığım Kelimeler', icon: '⚠️', badge: difficultCards.length },
-                { id: 'stats', label: 'İstatistikler', icon: '📈' },
-                { id: 'settings', label: 'Ayarlar', icon: '⚙️' },
-              ].map(item => (
+              {navItems.map(item => (
                 <button
                   key={item.id}
-                  onClick={() => {
-                    setActiveTab(item.id);
-                    if (item.id !== 'weeks') setSelectedWeekId(null);
-                    if (item.id !== 'readings') setSelectedReadingId(null);
-                  }}
+                  onClick={() => goTab(item.id)}
                   className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition ${
                     activeTab === item.id ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' : 'text-slate-300 hover:bg-slate-800/80'
                   }`}
@@ -1209,9 +1309,9 @@
           {/* Ana İçerik */}
           <div className="flex-1 flex flex-col h-full overflow-hidden">
             {/* Header */}
-            <header className="bg-slate-950 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between">
-              <div>
-                <h2 className="text-base font-bold text-white capitalize">
+            <header className="bg-slate-950 border-b border-slate-800 px-4 md:px-6 py-3 md:py-3.5 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="text-sm md:text-base font-bold text-white capitalize truncate">
                   {({
                     'dashboard': 'Ana Sayfa', 'daily-review': 'Günlük Tekrar (Spaced Repetition)', 'weeks': 'Haftalık Listelerim',
                     'readings': 'Okuma Parçalarım', 'bank': 'YÖKDİL Kelime Bankası', 'flashcards': 'Kelime Kartları', 'study': 'Sınavlar & Testler',
@@ -1222,9 +1322,9 @@
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setIsUploadReadingOpen(true)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                  className="px-2.5 md:px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition whitespace-nowrap"
                 >
-                  + Metin Yükle
+                  + Metin<span className="hidden sm:inline"> Yükle</span>
                 </button>
                 <button
                   onClick={() => {
@@ -1233,15 +1333,15 @@
                     setInitialSentence('');
                     setIsVocabModalOpen(true);
                   }}
-                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow transition"
+                  className="px-2.5 md:px-3.5 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow transition whitespace-nowrap"
                 >
-                  + Kelime Ekle
+                  + Kelime<span className="hidden sm:inline"> Ekle</span>
                 </button>
               </div>
             </header>
 
             {/* Sayfalar */}
-            <main className="flex-1 overflow-y-auto p-6 max-w-6xl w-full mx-auto pb-20 md:pb-6">
+            <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 max-w-6xl w-full mx-auto pb-24 md:pb-6">
               {/* ANA SAYFA */}
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
@@ -1275,6 +1375,23 @@
                         Yeni Metin Yükle
                       </button>
                     </div>
+                  </div>
+
+                  {/* Seri, günlük hedef, sınav sayacı */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <button onClick={() => setActiveTab('stats')} className="text-left bg-slate-950 p-4 rounded-2xl border border-slate-800 hover:border-orange-600 transition">
+                      <p className="text-[11px] text-slate-400">🔥 Seri</p>
+                      <p className="text-xl font-black text-orange-400">{streakNow} gün</p>
+                    </button>
+                    <button onClick={() => setActiveTab('daily-review')} className="text-left bg-slate-950 p-4 rounded-2xl border border-slate-800 hover:border-blue-600 transition">
+                      <p className="text-[11px] text-slate-400">🎯 Bugün</p>
+                      <p className="text-xl font-black text-white">{todayRec.reviews || 0}<span className="text-xs text-slate-500">/{settings.dailyGoal || 20}</span></p>
+                      <div className="h-1.5 mt-1 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: Math.min(100, (todayRec.reviews || 0) / (settings.dailyGoal || 20) * 100) + '%' }} /></div>
+                    </button>
+                    <button onClick={() => setActiveTab('stats')} className="text-left bg-slate-950 p-4 rounded-2xl border border-slate-800 hover:border-indigo-600 transition">
+                      <p className="text-[11px] text-slate-400">📅 Sınava</p>
+                      <p className="text-xl font-black text-indigo-300">{examLeft == null ? 'Tarih gir' : examLeft > 0 ? examLeft + ' gün' : examLeft === 0 ? 'Bugün' : '—'}</p>
+                    </button>
                   </div>
 
                   {/* İstatistik Kutuları */}
@@ -1340,7 +1457,13 @@
               {/* GÜNLÜK TEKRAR */}
               {activeTab === 'daily-review' && (
                 <div className="max-w-xl mx-auto space-y-4">
-                  {dueCards.length === 0 ? (
+                  {extraReviewIds && (
+                    <div className="flex items-center justify-between text-xs px-3 py-2 rounded-lg bg-amber-950/40 border border-amber-800/50 text-amber-200">
+                      <span>Zorlandığım kelimeler tekrar ediliyor ({extraReviewIds.length})</span>
+                      <button onClick={() => setExtraReviewIds(null)} className="underline">Normal tekrara dön</button>
+                    </div>
+                  )}
+                  {reviewCards.length === 0 ? (
                     <div className="text-center py-16 bg-slate-950 rounded-3xl border border-slate-800 p-8 space-y-4">
                       <div className="text-5xl">🎉</div>
                       <h3 className="text-xl font-bold text-white">Harika İş!</h3>
@@ -1351,19 +1474,19 @@
                     </div>
                   ) : (
                     <DailyReviewSession
-                      cards={dueCards}
+                      key={'review-' + getTodayStr() + (extraReviewIds ? '-extra' : '')}
+                      cards={reviewCards}
+                      goal={settings.dailyGoal || 20}
+                      doneToday={(activity.find(a => a.id === getTodayStr()) || {}).reviews || 0}
                       onComplete={() => {
                         if (window.confetti) window.confetti({ particleCount: 100 });
+                        setExtraReviewIds(null);
                         setActiveTab('dashboard');
                       }}
                       onRate={(cardId, rating) => {
-                        const updated = cards.map(c => {
-                          if (c.id === cardId) {
-                            return { ...c, srs: processReview(c.srs, rating) };
-                          }
-                          return c;
-                        });
-                        setCards(updated);
+                        const now = new Date().toISOString();
+                        setCards(prev => prev.map(c => c.id === cardId ? { ...c, srs: processReview(c.srs, rating), updatedAt: now } : c));
+                        logActivity({ reviews: 1, correct: rating >= 3 ? 1 : 0, again: rating === 1 ? 1 : 0 });
                       }}
                     />
                   )}
@@ -1403,6 +1526,43 @@
                           <p className="text-xs text-slate-400 mt-1">{current.category} • {current.wordCount} kelime</p>
                         </div>
 
+                        {/* Akademik Kelime Listesi (AWL) özeti */}
+                        {(() => {
+                          const bank = new Set(cards.map(c => String(c.lemma || c.english).toLowerCase()));
+                          const inBank = (w) => bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
+                          const seen = new Map();
+                          (plainText(current.content).match(/[A-Za-z]+/g) || []).forEach(t => {
+                            const w = t.toLowerCase();
+                            if (w.length < 3 || seen.has(w) || STOPWORDS.has(w)) return;
+                            const n = awlSublist(w);
+                            if (n) seen.set(w, n);
+                          });
+                          const list = [...seen.entries()].sort((a, b) => a[1] - b[1]);
+                          if (!list.length) return null;
+                          const missing = list.filter(([w]) => !inBank(w));
+                          return (
+                            <div className="bg-slate-950 p-4 rounded-2xl border border-purple-900/50 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-xs text-purple-200 font-bold mr-auto">📚 Bu metinde {list.length} akademik kelime (AWL) var{missing.length ? ', ' + missing.length + ' tanesi bankanızda yok' : ' — hepsi bankanızda ✓'}</p>
+                                <label className="flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
+                                  <input type="checkbox" checked={awlHighlight} onChange={e => setAwlHighlight(e.target.checked)} className="accent-purple-500" />
+                                  Metinde vurgula
+                                </label>
+                              </div>
+                              <div className="flex flex-wrap gap-1">
+                                {list.slice(0, 80).map(([w, n]) => (
+                                  <button key={w}
+                                    onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setWordPop({ word: w, sentence: extractSentence(plainText(current.content), w), x: r.left + r.width / 2, y: r.bottom, top: r.top, readingId: current.id }); }}
+                                    title={'Alt liste ' + n + (inBank(w) ? ' · bankada var' : ' · anlamını gör / karta ekle')}
+                                    className={"px-2 py-0.5 rounded-full text-[11px] border " + (inBank(w) ? 'border-emerald-800 text-emerald-300 bg-emerald-950/40' : 'border-purple-800 text-purple-200 bg-purple-950/40 hover:bg-purple-900')}>
+                                    {w}<sup className="ml-0.5 text-[8px] opacity-70">{n}</sup>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {/* Metin Alanı ve Seçim */}
                         <div
                           data-reader
@@ -1413,11 +1573,23 @@
                           className="bg-slate-950 p-8 rounded-2xl border border-slate-800 text-slate-200 font-serif leading-loose text-base whitespace-pre-wrap select-text"
                         >
                           {/* "## " ile başlayan satırlar başlık olarak kalın gösterilir */}
-                          {current.content.split('\n').map((line, i) => (
-                            /^##\s+/.test(line)
-                              ? <strong key={i} className="block font-sans font-black text-white text-lg leading-snug mt-2 mb-1">{line.replace(/^##\s+/, '')}</strong>
-                              : <React.Fragment key={i}>{line}{'\n'}</React.Fragment>
-                          ))}
+                          {(() => {
+                            // AWL vurgusu (çok uzun metinlerde performans için kapalı)
+                            const hl = awlHighlight && current.content.length < 120000;
+                            const bank = hl ? new Set(cards.map(c => String(c.lemma || c.english).toLowerCase())) : null;
+                            const renderLine = (line) => !hl ? line : line.split(/([A-Za-z]+)/).map((tok, k) => {
+                              if (k % 2 === 0) return tok;
+                              const w = tok.toLowerCase();
+                              if (w.length < 3 || STOPWORDS.has(w) || !awlSublist(w)) return tok;
+                              const own = bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
+                              return <span key={k} className={"underline decoration-2 underline-offset-4 " + (own ? 'decoration-emerald-500/70' : 'decoration-purple-400')}>{tok}</span>;
+                            });
+                            return current.content.split('\n').map((line, i) => (
+                              /^##\s+/.test(line)
+                                ? <strong key={i} className="block font-sans font-black text-white text-lg leading-snug mt-2 mb-1">{line.replace(/^##\s+/, '')}</strong>
+                                : <React.Fragment key={i}>{renderLine(line)}{'\n'}</React.Fragment>
+                            ));
+                          })()}
                         </div>
                       </div>
                     );
@@ -1462,11 +1634,26 @@
                 )
               )}
 
+              {/* İSTATİSTİKLER */}
+              {activeTab === 'stats' && (
+                <StatsSection cards={cards} activity={activity} settings={settings} setSettings={setSettings} />
+              )}
+
+              {/* ZORLANDIĞIM KELİMELER */}
+              {activeTab === 'difficult' && (
+                <DifficultSection
+                  cards={cards}
+                  onUnmark={(id) => setCards(prev => prev.map(c => c.id === id ? { ...c, isDifficult: false, updatedAt: new Date().toISOString() } : c))}
+                  onStudy={(ids) => { setExtraReviewIds(ids); setActiveTab('daily-review'); }}
+                />
+              )}
+
               {/* SINAVLAR & TESTLER */}
               {activeTab === 'study' && (
                 <ExamSection
                   cards={cards}
                   readings={readings}
+                  onAnswer={(type, ok) => logActivity({ examQ: 1, examCorrect: ok ? 1 : 0 }, { [type]: [ok ? 1 : 0, 1] })}
                   onMarkDifficult={(ids) => {
                     const set = new Set(ids);
                     setCards(prev => prev.map(c => set.has(c.id) ? { ...c, isDifficult: true, updatedAt: new Date().toISOString() } : c));
@@ -1483,6 +1670,7 @@
                   recentIds={recentCardIds}
                   onUpdate={(updated) => setCards(prev => prev.map(c => c.id === updated.id ? updated : c))}
                   onUpdateMany={(list) => { const m = new Map(list.map(c => [c.id, c])); setCards(prev => prev.map(c => m.get(c.id) || c)); }}
+                  onAudio={() => setAudioOpen(true)}
                   onDelete={(id) => {
                     const word = (cards.find(c => c.id === id) || {}).english;
                     setCards(prev => prev.filter(c => c.id !== id));
@@ -1656,8 +1844,15 @@
 
           {/* Tıkla-anlam kutusu */}
           {wordPop && activeTab === 'readings' && (
-            <WordPopover pop={wordPop} cards={cards} onAdd={addWordFromPopover} onClose={() => setWordPop(null)} />
+            <WordPopover pop={wordPop} cards={cards} onAdd={addWordFromPopover} onClose={() => setWordPop(null)}
+                         onAnalyze={(s) => { setWordPop(null); setSentenceToAnalyze(s); }} />
           )}
+
+          {/* Sesli çalışma */}
+          {audioOpen && <AudioStudyModal cards={cards} dueCards={dueCards} onClose={() => setAudioOpen(false)} />}
+
+          {/* Cümle çevirisi ve analizi */}
+          {sentenceToAnalyze && <SentenceModal sentence={sentenceToAnalyze} cards={cards} onClose={() => setSentenceToAnalyze(null)} />}
 
           {/* Metinden Otomatik Kelime Çıkarma */}
           {autoVocabReadingId && readings.find(r => r.id === autoVocabReadingId) && (
@@ -1693,7 +1888,7 @@
           )}
 
           {toast && (
-            <div role="status" className={"fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-white text-xs font-bold shadow-2xl max-w-[90vw] " + (toast.startsWith('⚠') ? 'bg-red-600' : 'bg-emerald-600')}>
+            <div role="status" className={"fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-white text-xs font-bold shadow-2xl max-w-[90vw] " + (toast.startsWith('⚠') ? 'bg-red-600' : 'bg-emerald-600')}>
               {toast.startsWith('⚠') ? toast : '✓ ' + toast}
             </div>
           )}
@@ -1729,24 +1924,57 @@
     }
 
     // --- YARDIMCI MODAL BİLEŞENLERİ ---
-    function DailyReviewSession({ cards, onComplete, onRate }) {
+    function DailyReviewSession({ cards, onComplete, onRate, goal, doneToday }) {
+      // Oturum başındaki liste sabitlenir (değerlendirilen kart listeden düşünce sıradaki kart atlanmasın)
+      const [queue] = useState(() => cards);
       const [idx, setIdx] = useState(0);
       const [revealed, setRevealed] = useState(false);
-      const card = cards[idx];
+      const [drag, setDrag] = useState(0);
+      const touch = useRef(null);
+      const card = queue[idx];
 
       const handleRating = (rating) => {
+        if (!card) return;
         onRate(card.id, rating);
-        setRevealed(false);
-        if (idx + 1 < cards.length) {
-          setIdx(idx + 1);
-        } else {
-          onComplete();
-        }
+        setRevealed(false); setDrag(0);
+        if (idx + 1 < queue.length) setIdx(idx + 1);
+        else onComplete();
       };
 
+      // Klavye: Boşluk = anlamı göster, 1-4 = değerlendir
+      useEffect(() => {
+        const onKey = (e) => {
+          if (/input|textarea|select/i.test((e.target && e.target.tagName) || '')) return;
+          if (!revealed && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); setRevealed(true); }
+          else if (revealed && /^[1-4]$/.test(e.key)) handleRating(+e.key);
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      });
+
+      // Dokunmatik: dokun = göster; anlam açıkken sağa kaydır = İyi, sola = Tekrar
+      const onTouchStart = (e) => { touch.current = e.touches[0].clientX; };
+      const onTouchMove = (e) => { if (touch.current != null && revealed) setDrag(e.touches[0].clientX - touch.current); };
+      const onTouchEnd = () => {
+        if (revealed && Math.abs(drag) > 90) handleRating(drag > 0 ? 3 : 1);
+        else setDrag(0);
+        touch.current = null;
+      };
+
+      if (!card) return null;
+      const preview = [1, 2, 3, 4].map(g => fsrsNext(card.srs, g).interval);
+      const swipeHint = drag > 40 ? 'İyi →' : drag < -40 ? '← Tekrar' : '';
+
       return (
-        <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 shadow-2xl text-center space-y-6">
-          <div className="text-xs text-slate-400 font-bold">Kart {idx + 1} / {cards.length}</div>
+        <div
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+          style={{ transform: drag ? 'translateX(' + drag + 'px) rotate(' + (drag / 30) + 'deg)' : undefined, transition: drag ? 'none' : 'transform .2s' }}
+          className={"bg-slate-950 p-6 sm:p-8 rounded-3xl border shadow-2xl text-center space-y-6 " + (drag > 40 ? 'border-emerald-600' : drag < -40 ? 'border-red-600' : 'border-slate-800')}>
+          <div className="flex items-center justify-between text-xs text-slate-400 font-bold">
+            <span>Kart {idx + 1} / {queue.length}</span>
+            {goal > 0 && <span className={doneToday >= goal ? 'text-emerald-400' : ''}>🎯 Bugün {doneToday}/{goal}</span>}
+          </div>
+          {swipeHint && <div className={"text-sm font-black " + (drag > 0 ? 'text-emerald-400' : 'text-red-400')}>{swipeHint}</div>}
           <div>
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{card.partOfSpeech}</span>
             <h2 className="text-3xl font-black text-white mt-2">{card.english}</h2>
@@ -1769,17 +1997,253 @@
                 </div>
               )}
               <div className="grid grid-cols-4 gap-2 pt-2">
-                <button onClick={() => handleRating(1)} className="p-2.5 rounded-xl bg-red-950/60 border border-red-800 text-red-300 text-xs font-bold">Tekrar [1]</button>
-                <button onClick={() => handleRating(2)} className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800 text-amber-300 text-xs font-bold">Zor [2]</button>
-                <button onClick={() => handleRating(3)} className="p-2.5 rounded-xl bg-blue-950/60 border border-blue-800 text-blue-300 text-xs font-bold">İyi [3]</button>
-                <button onClick={() => handleRating(4)} className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-bold">Kolay [4]</button>
+                {[[1, 'Tekrar', 'bg-red-950/60 border-red-800 text-red-300'], [2, 'Zor', 'bg-amber-950/60 border-amber-800 text-amber-300'], [3, 'İyi', 'bg-blue-950/60 border-blue-800 text-blue-300'], [4, 'Kolay', 'bg-emerald-950/60 border-emerald-800 text-emerald-300']].map(([g, label, cls]) => (
+                  <button key={g} onClick={() => handleRating(g)} className={"p-2.5 rounded-xl border text-xs font-bold " + cls}>
+                    {label}<span className="block text-[10px] font-normal opacity-80">{g === 1 ? 'yarın' : formatInterval(preview[g - 1])}</span>
+                  </button>
+                ))}
               </div>
+              <p className="text-[10px] text-slate-600">Klavye: 1-4 · Telefonda sağa kaydır = İyi, sola = Tekrar</p>
             </div>
           ) : (
             <button onClick={() => setRevealed(true)} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-lg">
-              Anlamını Göster
+              Anlamını Göster <span className="opacity-60 font-normal">(boşluk)</span>
             </button>
           )}
+        </div>
+      );
+    }
+
+    // --- AKADEMİK KELİME LİSTESİ (AWL, Coxhead 2000): 570 kelime ailesi, 10 alt liste (1 = en sık) ---
+    const AWL_SUBLISTS = [
+      'analyse approach area assess assume authority available benefit concept consist constitute context contract create data define derive distribute economy environment establish estimate evident export factor finance formula function identify income indicate individual interpret involve issue labour legal legislate major method occur percent period policy principle proceed process require research respond role section sector significant similar source specific structure theory vary',
+      'achieve acquire administrate affect appropriate aspect assist category chapter commission community complex compute conclude conduct consequent construct consume credit culture design distinct element equate evaluate feature final focus impact injure institute invest item journal maintain normal obtain participate perceive positive potential previous primary purchase range region regulate relevant reside resource restrict secure seek select site strategy survey text tradition transfer',
+      'alternative circumstance comment compensate component consent considerable constant constrain contribute convene coordinate core corporate correspond criteria deduce demonstrate document dominate emphasis ensure exclude framework fund illustrate immigrate imply initial instance interact justify layer link locate maximise minor negate outcome partner philosophy physical proportion publish react register rely remove scheme sequence sex shift specify sufficient task technical technique technology valid volume',
+      'access adequate annual apparent approximate attitude attribute civil code commit communicate concentrate confer contrast cycle debate despite dimension domestic emerge error ethnic goal grant hence hypothesis implement implicate impose integrate internal investigate job label mechanism obvious occupy option output overall parallel parameter phase predict principal prior professional project promote regime resolve retain series statistic status stress subsequent sum summary undertake',
+      'academy adjust alter amend aware capacity challenge clause compound conflict consult contact decline discrete draft enable energy enforce entity equivalent evolve expand expose external facilitate fundamental generate generation image liberal licence logic margin medical mental modify monitor network notion objective orient perspective precise prime psychology pursue ratio reject revenue stable style substitute sustain symbol target transit trend version welfare whereas',
+      'abstract accurate acknowledge aggregate allocate assign attach author bond brief capable cite cooperate discriminate display diverse domain edit enhance estate exceed expert explicit federal fee flexible furthermore gender ignorant incentive incidence incorporate index inhibit initiate input instruct intelligence interval lecture migrate minimum ministry motive neutral nevertheless overseas precede presume rational recover reveal scope subsidy tape trace transform transport underlie utilise',
+      'adapt adult advocate aid channel chemical classic comprehensive comprise confirm contrary convert couple decade definite deny differentiate dispose dynamic eliminate empirical equip extract file finite foundation globe grade guarantee hierarchy identical ideology infer innovate insert intervene isolate media mode paradigm phenomenon priority prohibit publication quote release reverse simulate sole somewhat submit successor survive thesis topic transmit ultimate unique visible voluntary',
+      'abandon accompany accumulate ambiguous append appreciate arbitrary automate bias chart clarify commodity complement conform contemporary contradict crucial currency denote detect deviate displace drama eventual exhibit exploit fluctuate guideline highlight implicit induce inevitable infrastructure inspect intense manipulate minimise nuclear offset paragraph plus practitioner predominant prospect radical random reinforce restore revise schedule tension terminate theme thereby uniform vehicle via virtual visual widespread',
+      'accommodate analogy anticipate assure attain behalf bulk cease coherent coincide commence compatible concurrent confine controversy converse device devote diminish distort duration erode ethic format found inherent insight integral intermediate manual mature mediate medium military minimal mutual norm overlap passive portion preliminary protocol qualitative refine relax restrain revolution rigid route scenario sphere subordinate supplement suspend team temporary trigger unify violate vision',
+      'adjacent albeit assemble collapse colleague compile conceive convince depress encounter enormous forthcoming incline integrity intrinsic invoke levy likewise nonetheless notwithstanding odd ongoing panel persist pose reluctance so-called straightforward undergo whereby',
+    ].map(s => s.split(' '));
+    // Kelime ailesi eşleşmesi: kısa kelimeler birebir, uzunlarda ortak kök (analyse ↔ analysis, analytical)
+    const AWL_INDEX = (() => {
+      const exact = new Map(), stems = [];
+      const amToBr = (w) => w.replace(/ize$/, 'ise').replace(/yze$/, 'yse').replace(/^labor/, 'labour').replace(/^license/, 'licence');
+      AWL_SUBLISTS.forEach((words, i) => words.forEach(h => {
+        exact.set(h, i + 1);
+        if (h.length > 5) stems.push([h.slice(0, Math.max(5, h.length - 2)), i + 1]);
+      }));
+      return { exact, stems, amToBr };
+    })();
+    const AWL_FALSE = new Set(['found', 'founded', 'textile', 'texture', 'sexy', 'teammate']);
+    const awlSublist = (word) => {
+      if (!word) return 0;
+      let w = String(word).toLowerCase().trim();
+      if (AWL_FALSE.has(w)) return 0;
+      w = AWL_INDEX.amToBr(w);
+      if (AWL_INDEX.exact.has(w)) return AWL_INDEX.exact.get(w);
+      for (const base of [w.replace(/(s|es|ed|ing|ly)$/, ''), w.replace(/ies$/, 'y'), w.replace(/ied$/, 'y')]) if (AWL_INDEX.exact.has(base)) return AWL_INDEX.exact.get(base);
+      for (const [stem, n] of AWL_INDEX.stems) if (w.startsWith(stem)) return n;
+      return 0;
+    };
+    const AwlBadge = ({ word }) => { const n = awlSublist(word); return n ? <span title={'Akademik Kelime Listesi, alt liste ' + n + ' (1 = en sık)'} className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-950 text-purple-300">AWL {n}</span> : null; };
+
+    // --- İSTATİSTİK YARDIMCILARI ---
+    const isActiveDay = (a) => a && ((a.reviews || 0) + (a.examQ || 0)) > 0;
+    function computeStreak(activity) {
+      const active = new Set(activity.filter(isActiveDay).map(a => a.id));
+      let d = getTodayStr();
+      if (!active.has(d)) d = addDays(d, -1);              // bugün henüz çalışılmadıysa dünden say
+      let n = 0;
+      while (active.has(d)) { n++; d = addDays(d, -1); }
+      return n;
+    }
+    function bestStreak(activity) {
+      const days = activity.filter(isActiveDay).map(a => a.id).sort();
+      let best = 0, cur = 0, prev = null;
+      days.forEach(d => { cur = prev && addDays(prev, 1) === d ? cur + 1 : 1; best = Math.max(best, cur); prev = d; });
+      return best;
+    }
+    const daysUntil = (dateStr) => dateStr ? Math.ceil((Date.parse(dateStr + 'T00:00:00') - Date.parse(getTodayStr() + 'T00:00:00')) / 86400000) : null;
+
+    function StatBox({ label, value, sub, cls }) {
+      return (
+        <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+          <p className={"text-xs " + (cls || 'text-slate-400')}>{label}</p>
+          <p className={"text-2xl font-black mt-1 " + (cls || 'text-white')}>{value}</p>
+          {sub && <p className="text-[11px] text-slate-500 mt-0.5">{sub}</p>}
+        </div>
+      );
+    }
+
+    function StatsSection({ cards, activity, settings, setSettings }) {
+      const today = getTodayStr();
+      const todayRec = activity.find(a => a.id === today) || {};
+      const goal = settings.dailyGoal || 20;
+      const streak = computeStreak(activity), best = bestStreak(activity);
+      const left = daysUntil(settings.examDate);
+
+      // Son 30 gün
+      const days30 = Array.from({ length: 30 }, (_, i) => addDays(today, i - 29));
+      const byDay = new Map(activity.map(a => [a.id, a]));
+      const maxRev = Math.max(goal, ...days30.map(d => (byDay.get(d) || {}).reviews || 0), 1);
+      const added30 = days30.map(d => cards.filter(c => (c.createdAt || '').slice(0, 10) === d).length);
+
+      // Kart durumları
+      const states = { new: 0, learning: 0, review: 0, mastered: 0 };
+      cards.forEach(c => { const s = (c.srs && c.srs.state) || 'new'; states[s] = (states[s] || 0) + 1; });
+      const stateMeta = [['new', 'Yeni', 'bg-slate-500'], ['learning', 'Öğreniliyor', 'bg-amber-500'], ['review', 'Tekrar', 'bg-blue-500'], ['mastered', 'Kalıcı', 'bg-emerald-500']];
+
+      // Önümüzdeki 7 gün
+      const forecast = Array.from({ length: 7 }, (_, i) => {
+        const d = addDays(today, i);
+        return { d, n: cards.filter(c => c.srs && (i === 0 ? c.srs.nextReviewAt <= d : c.srs.nextReviewAt === d)).length };
+      });
+      const maxF = Math.max(1, ...forecast.map(f => f.n));
+
+      // Sınav başarısı (tüm zamanlar)
+      const exam = {};
+      activity.forEach(a => Object.entries(a.examByType || {}).forEach(([t, [c, n]]) => { exam[t] = exam[t] || [0, 0]; exam[t][0] += c; exam[t][1] += n; }));
+      const totalRev = activity.reduce((s, a) => s + (a.reviews || 0), 0);
+      const totalCorrect = activity.reduce((s, a) => s + (a.correct || 0), 0);
+
+      const hardest = [...cards].filter(c => c.srs && ((c.srs.lapses || 0) > 0 || c.srs.difficulty > 6))
+        .sort((a, b) => ((b.srs.lapses || 0) - (a.srs.lapses || 0)) || ((b.srs.difficulty || 0) - (a.srs.difficulty || 0))).slice(0, 10);
+      const dayLabel = (d) => new Date(d + 'T00:00:00').toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+
+      return (
+        <div className="space-y-5">
+          {/* Sınav sayacı + hedef + seri */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="bg-gradient-to-br from-indigo-700 to-blue-800 p-5 rounded-2xl text-white space-y-2">
+              <p className="text-xs text-blue-100">📅 YÖKDİL sınavına</p>
+              <p className="text-3xl font-black">{left == null ? '—' : left > 0 ? left + ' gün' : left === 0 ? 'Bugün!' : 'Geçti'}</p>
+              <label className="block text-[11px] text-blue-100">Sınav tarihi
+                <input type="date" value={settings.examDate || ''} onChange={e => setSettings({ ...settings, examDate: e.target.value })}
+                       className="mt-1 w-full px-2 py-1 rounded-md bg-white/15 border border-white/20 text-white text-xs" />
+              </label>
+              {left > 0 && cards.length > 0 && <p className="text-[11px] text-blue-100">Günde ~{Math.ceil(Math.max(0, 600 - cards.length) / left)} yeni kelime ile sınava kadar 600 kelimeye ulaşırsınız.</p>}
+            </div>
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-2">
+              <p className="text-xs text-slate-400">🎯 Bugünkü hedef</p>
+              <p className="text-3xl font-black text-white">{todayRec.reviews || 0}<span className="text-base text-slate-500"> / {goal} tekrar</span></p>
+              <div className="h-2 rounded bg-slate-800 overflow-hidden"><div className={"h-full " + ((todayRec.reviews || 0) >= goal ? 'bg-emerald-500' : 'bg-blue-500')} style={{ width: Math.min(100, (todayRec.reviews || 0) / goal * 100) + '%' }} /></div>
+              <label className="flex items-center gap-2 text-[11px] text-slate-400">Günlük hedef
+                <input type="number" min="5" max="300" step="5" value={goal} onChange={e => setSettings({ ...settings, dailyGoal: clampN(+e.target.value || 20, 5, 300) })}
+                       className="w-16 px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-white text-xs" />
+              </label>
+            </div>
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-1">
+              <p className="text-xs text-slate-400">🔥 Çalışma serisi</p>
+              <p className="text-3xl font-black text-orange-400">{streak} gün</p>
+              <p className="text-[11px] text-slate-500">En uzun seri: {best} gün</p>
+              <p className="text-[11px] text-slate-500">{isActiveDay(todayRec) ? 'Bugün çalıştınız ✓' : 'Seriyi korumak için bugün tekrar yapın.'}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatBox label="Toplam kelime" value={cards.length} sub={added30.reduce((a, b) => a + b, 0) + ' tanesi son 30 günde'} />
+            <StatBox label="Toplam tekrar" value={totalRev} sub={totalRev ? '%' + Math.round(totalCorrect / totalRev * 100) + ' doğru hatırlama' : '—'} cls="text-blue-400" />
+            <StatBox label="Kalıcı hafızada" value={states.mastered} sub="30+ gün aralıklı" cls="text-emerald-400" />
+            <StatBox label="Çözülen soru" value={activity.reduce((s, a) => s + (a.examQ || 0), 0)} sub={(() => { const q = activity.reduce((s, a) => s + (a.examQ || 0), 0), c = activity.reduce((s, a) => s + (a.examCorrect || 0), 0); return q ? '%' + Math.round(c / q * 100) + ' doğru' : 'Sınavlar sekmesinden'; })()} cls="text-purple-400" />
+          </div>
+
+          {/* Son 30 gün */}
+          <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-sm text-white">Son 30 gün</h3>
+              <span className="text-[10px] text-slate-500"><span className="inline-block w-2 h-2 bg-blue-500 rounded-sm mr-1" />tekrar <span className="inline-block w-2 h-2 bg-emerald-500 rounded-sm ml-2 mr-1" />yeni kelime · çizgi: hedef</span>
+            </div>
+            <div className="relative h-32 flex items-end gap-[3px]">
+              <div className="absolute left-0 right-0 border-t border-dashed border-slate-600" style={{ bottom: (goal / maxRev * 100) + '%' }} />
+              {days30.map((d, i) => {
+                const r = (byDay.get(d) || {}).reviews || 0;
+                return (
+                  <div key={d} className="flex-1 flex flex-col justify-end h-full" title={dayLabel(d) + ': ' + r + ' tekrar, ' + added30[i] + ' yeni kelime'}>
+                    <div className="bg-emerald-500/80 rounded-t-sm" style={{ height: Math.min(100, added30[i] / maxRev * 100) + '%' }} />
+                    <div className={"rounded-t-sm " + (d === today ? 'bg-blue-400' : 'bg-blue-600')} style={{ height: (r / maxRev * 100) + '%' }} />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between text-[10px] text-slate-500 mt-1"><span>{dayLabel(days30[0])}</span><span>Bugün</span></div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Kart durumları */}
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
+              <h3 className="font-bold text-sm text-white">Kartların durumu</h3>
+              <div className="h-3 rounded-full overflow-hidden flex bg-slate-800">
+                {stateMeta.map(([k, , c]) => states[k] ? <div key={k} className={c} style={{ width: (states[k] / Math.max(1, cards.length) * 100) + '%' }} /> : null)}
+              </div>
+              <div className="grid grid-cols-2 gap-1 text-xs">
+                {stateMeta.map(([k, label, c]) => <p key={k} className="text-slate-300"><span className={"inline-block w-2 h-2 rounded-sm mr-1.5 " + c} />{label}: <b>{states[k] || 0}</b></p>)}
+              </div>
+            </div>
+            {/* 7 günlük yük */}
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
+              <h3 className="font-bold text-sm text-white">Önümüzdeki 7 günün tekrar yükü</h3>
+              <div className="space-y-1">
+                {forecast.map((f, i) => (
+                  <div key={f.d} className="flex items-center gap-2 text-[11px]">
+                    <span className="w-14 text-slate-400">{i === 0 ? 'Bugün' : dayLabel(f.d)}</span>
+                    <div className="flex-1 h-2 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: (f.n / maxF * 100) + '%' }} /></div>
+                    <span className="w-6 text-right text-slate-300">{f.n}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-2">
+              <h3 className="font-bold text-sm text-white">Sınav başarısı (soru türüne göre)</h3>
+              {Object.keys(exam).length === 0 ? <p className="text-xs text-slate-500">Henüz soru çözülmedi.</p> :
+                Object.entries(exam).map(([t, [c, n]]) => (
+                  <div key={t} className="text-[11px]">
+                    <div className="flex justify-between text-slate-300"><span>{t}</span><span>{c}/{n} · %{Math.round(c / n * 100)}</span></div>
+                    <div className="h-1.5 rounded bg-slate-800 overflow-hidden"><div className={"h-full " + (c / n >= 0.7 ? 'bg-emerald-500' : c / n >= 0.5 ? 'bg-amber-500' : 'bg-red-500')} style={{ width: (c / n * 100) + '%' }} /></div>
+                  </div>
+                ))}
+            </div>
+            <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-2">
+              <h3 className="font-bold text-sm text-white">En çok zorlandığınız kelimeler</h3>
+              {!hardest.length ? <p className="text-xs text-slate-500">Henüz yok.</p> : hardest.map(c => (
+                <p key={c.id} className="text-[11px] text-slate-300 flex justify-between gap-2"><span><b className="text-white">{c.english}</b> — {c.turkish}</span><span className="text-red-300 whitespace-nowrap">{c.srs.lapses || 0}× unutuldu</span></p>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function DifficultSection({ cards, onUnmark, onStudy }) {
+      const list = cards.filter(c => c.isDifficult || (c.srs && c.srs.lapses >= 3));
+      if (!list.length) {
+        return <div className="text-center py-16 bg-slate-950 rounded-2xl border border-dashed border-slate-800 text-xs text-slate-400">Zorlandığınız kelime yok. Sınavda yanlış yaptığınız veya tekrarda sık unuttuğunuz kelimeler burada toplanır.</div>;
+      }
+      return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-bold text-lg text-white mr-auto">Zorlandığım Kelimeler ({list.length})</h3>
+            <button onClick={() => onStudy(list.map(c => c.id))} className="px-4 py-2 rounded-lg bg-amber-600 text-xs font-bold text-white hover:bg-amber-500">Bunları şimdi tekrar et</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {list.map(c => (
+              <div key={c.id} className="p-4 rounded-xl bg-slate-950 border border-amber-900/50 space-y-1">
+                <div className="flex items-center gap-2">
+                  <b className="text-white">{c.english}</b>
+                  <button onClick={() => playWord(c)} aria-label={c.english + ' dinle'} className="text-xs text-blue-400">🔊</button>
+                  <span className="ml-auto text-[10px] text-red-300">{(c.srs && c.srs.lapses) || 0}× unutuldu</span>
+                </div>
+                <p className="text-xs text-blue-300 font-semibold">{c.turkish}</p>
+                {c.originalSentence && <p className="text-[11px] text-slate-400 font-serif italic line-clamp-2">"{c.originalSentence}"</p>}
+                {c.isDifficult && <button onClick={() => onUnmark(c.id)} className="text-[10px] text-slate-500 hover:text-slate-300 underline">Artık zorlanmıyorum</button>}
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
@@ -1915,7 +2379,7 @@
       }).filter(Boolean);
     }
 
-    function ExamSection({ cards, readings, onMarkDifficult }) {
+    function ExamSection({ cards, readings, onMarkDifficult, onAnswer }) {
       const [mode, setMode] = useState('mixed');
       const [count, setCount] = useState(10);
       const [qs, setQs] = useState(null);
@@ -2018,7 +2482,7 @@
                 const state = !isAnswered ? 'idle' : i === q.answer ? 'right' : i === my ? 'wrong' : 'dim';
                 const cls = { idle: 'border-slate-700 hover:border-blue-500 hover:bg-slate-900', right: 'border-emerald-500 bg-emerald-600/15 text-emerald-200', wrong: 'border-red-500 bg-red-600/15 text-red-200', dim: 'border-slate-800 text-slate-500' }[state];
                 return (
-                  <button key={i} disabled={isAnswered} onClick={() => setPicked({ ...picked, [idx]: i })}
+                  <button key={i} disabled={isAnswered} onClick={() => { setPicked({ ...picked, [idx]: i }); if (onAnswer) onAnswer(q.type, i === q.answer); }}
                           className={"w-full text-left px-4 py-2.5 rounded-xl border text-sm transition " + cls}>
                     <b className="mr-2">{LETTERS[i]})</b>{o}
                   </button>
@@ -2042,8 +2506,231 @@
       );
     }
 
+    // --- SESLİ ÇALIŞMA MODU (tarayıcının konuşma sentezi; İngilizce kelime → Türkçe anlam → örnek cümle) ---
+    const speakAsync = (text, lang, rate) => new Promise(resolve => {
+      if (!('speechSynthesis' in window) || !text) return resolve();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang; u.rate = rate || 1;
+      const v = window.speechSynthesis.getVoices().find(x => x.lang && x.lang.toLowerCase().startsWith(lang.slice(0, 2)));
+      if (v) u.voice = v;
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      u.onend = finish; u.onerror = finish;
+      setTimeout(finish, 6000 + text.length * 150);           // bazı tarayıcılarda onend gelmeyebilir
+      window.speechSynthesis.speak(u);
+    });
+
+    function AudioStudyModal({ cards, dueCards, onClose }) {
+      const [source, setSource] = useState(dueCards.length ? 'due' : 'all');
+      const [rate, setRate] = useState(0.9);
+      const [withSentence, setWithSentence] = useState(true);
+      const [loop, setLoop] = useState(false);
+      const [shuffleOn, setShuffleOn] = useState(false);
+      const [playing, setPlaying] = useState(false);
+      const [idx, setIdx] = useState(0);
+      const [phase, setPhase] = useState('');
+      const run = useRef(0);
+
+      const base = source === 'due' ? dueCards : source === 'difficult' ? cards.filter(c => c.isDifficult || (c.srs && c.srs.lapses >= 3)) : cards;
+      const [order, setOrder] = useState(() => base.map(c => c.id));
+      useEffect(() => { setOrder((shuffleOn ? shuffleArr(base) : base).map(c => c.id)); setIdx(0); stop(); }, [source, shuffleOn]);
+      const list = order.map(id => cards.find(c => c.id === id)).filter(Boolean);
+      const card = list[idx];
+      const hasTr = typeof speechSynthesis !== 'undefined' && speechSynthesis.getVoices().some(v => /^tr/i.test(v.lang));
+
+      const stop = () => { run.current++; setPlaying(false); setPhase(''); try { speechSynthesis.cancel(); } catch (e) {} };
+      useEffect(() => () => stop(), []);
+
+      const play = async (from) => {
+        const my = ++run.current;
+        setPlaying(true);
+        const pause = (ms) => new Promise(r => setTimeout(r, ms / rate));
+        for (let i = from; ; i++) {
+          if (i >= list.length) { if (loop && list.length) i = 0; else break; }
+          if (run.current !== my) return;
+          setIdx(i);
+          const c = list[i];
+          setPhase('en'); await speakAsync(c.english, 'en-US', rate); if (run.current !== my) return;
+          await pause(1200); if (run.current !== my) return;
+          setPhase('tr'); await speakAsync(firstMeaning(c) || c.turkish, 'tr-TR', rate); if (run.current !== my) return;
+          if (withSentence && c.originalSentence) {
+            await pause(700); if (run.current !== my) return;
+            setPhase('sentence'); await speakAsync(c.originalSentence, 'en-US', rate * 0.95); if (run.current !== my) return;
+          }
+          await pause(1500);
+        }
+        if (run.current === my) { setPlaying(false); setPhase(''); }
+      };
+
+      const jump = (d) => { const n = clampN(idx + d, 0, Math.max(0, list.length - 1)); stop(); setIdx(n); };
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div role="dialog" aria-label="Sesli çalışma" className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4">
+            <div className="flex items-center">
+              <h3 className="font-bold text-base text-white mr-auto">🎧 Dinleyerek Çalış</h3>
+              <button onClick={() => { stop(); onClose(); }} aria-label="Kapat" className="px-2 py-1 rounded-md text-slate-400 hover:bg-slate-800">✕</button>
+            </div>
+            <div className="grid grid-cols-3 gap-1 text-[11px]">
+              {[['due', 'Bugünküler (' + dueCards.length + ')'], ['difficult', 'Zorlandıklarım'], ['all', 'Tümü (' + cards.length + ')']].map(([k, l]) => (
+                <button key={k} onClick={() => setSource(k)} className={"px-2 py-1.5 rounded-lg font-bold " + (source === k ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{l}</button>
+              ))}
+            </div>
+
+            <div className="text-center py-6 rounded-2xl bg-slate-950 border border-slate-800 min-h-[9rem] flex flex-col justify-center gap-1 px-4">
+              {!card ? <p className="text-xs text-slate-500">Bu grupta kart yok.</p> : (
+                <>
+                  <p className={"text-2xl font-black " + (phase === 'en' ? 'text-white' : 'text-slate-300')}>{card.english}</p>
+                  {card.okunus && <p className="text-[11px] text-amber-300">[{card.okunus}]</p>}
+                  <p className={"text-base font-bold " + (phase === 'tr' ? 'text-blue-300' : 'text-blue-300/60')}>{card.turkish}</p>
+                  {withSentence && card.originalSentence && <p className={"text-[11px] font-serif italic " + (phase === 'sentence' ? 'text-slate-200' : 'text-slate-500')}>"{card.originalSentence}"</p>}
+                  <p className="text-[10px] text-slate-600 mt-1">{idx + 1} / {list.length}</p>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={() => jump(-1)} disabled={!card} aria-label="Önceki" className="w-10 h-10 rounded-full bg-slate-800 text-white disabled:opacity-40">⏮</button>
+              <button onClick={() => playing ? stop() : play(idx)} disabled={!card} aria-label={playing ? 'Duraklat' : 'Oynat'} className="w-14 h-14 rounded-full bg-blue-600 text-white text-xl font-bold disabled:opacity-40">{playing ? '⏸' : '▶'}</button>
+              <button onClick={() => jump(1)} disabled={!card} aria-label="Sonraki" className="w-10 h-10 rounded-full bg-slate-800 text-white disabled:opacity-40">⏭</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-300">
+              <label className="flex items-center gap-2">Hız
+                <input type="range" min="0.6" max="1.3" step="0.1" value={rate} onChange={e => setRate(+e.target.value)} className="flex-1 accent-blue-500" />
+                <span className="w-7 text-right">{rate.toFixed(1)}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={withSentence} onChange={e => setWithSentence(e.target.checked)} className="accent-blue-500" />Cümleyi de oku</label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={shuffleOn} onChange={e => setShuffleOn(e.target.checked)} className="accent-blue-500" />Karıştır</label>
+              <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} className="accent-blue-500" />Bitince başa dön</label>
+            </div>
+            {!hasTr && <p className="text-[10px] text-amber-400">Cihazınızda Türkçe ses bulunamadı; Türkçe anlamlar varsayılan sesle okunabilir. (Windows: Ayarlar → Zaman ve dil → Konuşma → Türkçe ses ekleyin.)</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // --- CÜMLE ÇEVİRİSİ VE ANALİZİ ---
+    const loadScript = (src, globalName) => new Promise((resolve, reject) => {
+      if (globalName && window[globalName]) return resolve(window[globalName]);
+      const s = document.createElement('script');
+      s.src = src; s.async = true;
+      s.onload = () => resolve(globalName ? window[globalName] : true);
+      s.onerror = () => reject(new Error('Kütüphane yüklenemedi: ' + src));
+      document.head.appendChild(s);
+    });
+    const loadNlp = () => loadScript('https://cdn.jsdelivr.net/npm/compromise@14.14.0/builds/compromise.js', 'nlp');
+
+    const translateSentence = async (text) => {
+      const j = await fetchJson('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(text.slice(0, 480)) + '&langpair=en|tr');
+      if (!j) throw new Error('Çeviri alınamadı');
+      if (j.quotaFinished) throw new Error('Çeviri servisinin günlük ücretsiz kotası doldu');
+      return (j.responseData && j.responseData.translatedText) || '';
+    };
+
+    // Yan cümle başlatan kelimeler → tür ve Türkçe ipucu
+    const SUBORDINATORS = [
+      ['which', 'Sıfat cümlesi', 'önceki isme bilgi ekler: "-en / -an / -dığı"'], ['that', 'Sıfat / isim cümlesi', '"-dığı / -en" ya da "ki"'],
+      ['who', 'Sıfat cümlesi (kişi)', '"-en kişi"'], ['whom', 'Sıfat cümlesi (kişi)', '"-diği kişi"'], ['whose', 'Sıfat cümlesi (sahiplik)', '"-in …-i olan"'],
+      ['where', 'Yer belirten yan cümle', '"-diği yer(de)"'], ['when', 'Zaman yan cümlesi', '"-dığında"'], ['while', 'Zaman / zıtlık yan cümlesi', '"-ken" ya da "oysa"'],
+      ['whereas', 'Zıtlık yan cümlesi', '"oysa, -mesine karşın"'], ['although', 'Zıtlık yan cümlesi', '"-mesine rağmen"'], ['though', 'Zıtlık yan cümlesi', '"-mesine rağmen"'],
+      ['even though', 'Zıtlık yan cümlesi', '"-mesine rağmen"'], ['because', 'Sebep yan cümlesi', '"çünkü / -diği için"'], ['since', 'Sebep / zaman yan cümlesi', '"-diği için" ya da "-den beri"'],
+      ['as', 'Sebep / zaman / benzerlik', '"-diği için / -dığı gibi"'], ['if', 'Koşul yan cümlesi', '"-irse"'], ['unless', 'Koşul yan cümlesi', '"-medikçe"'],
+      ['provided that', 'Koşul yan cümlesi', '"-mek şartıyla"'], ['so that', 'Amaç yan cümlesi', '"-sin diye"'], ['until', 'Zaman yan cümlesi', '"-e kadar"'],
+      ['before', 'Zaman yan cümlesi', '"-meden önce"'], ['after', 'Zaman yan cümlesi', '"-dikten sonra"'], ['once', 'Zaman yan cümlesi', '"-ir -mez"'],
+      ['whether', 'İsim cümlesi', '"-ip -mediği"'],
+    ];
+    const LINKER_TR = { 'zıtlık': 'zıtlık: "ancak, -e rağmen"', 'sebep-sonuç': 'sebep-sonuç: "bu yüzden, -dığı için"', 'ekleme': 'ekleme: "ayrıca, üstelik"', 'örnekleme': 'örnek: "örneğin"', 'koşul': 'koşul: "-medikçe, -mek şartıyla"', 'benzerlik': 'benzerlik: "benzer şekilde"', 'amaç': 'amaç: "-mek için"' };
+    const PASSIVE_RE = /\b(?:is|are|was|were|be|been|being|has been|have been|had been|will be|can be|could be|may be|might be|must be|should be)\s+(?:\w+ly\s+)?(\w+(?:ed|en|wn|lt|pt|ght|ung|ade|one|ept))\b/gi;
+
+    function SentenceModal({ sentence, cards, onClose }) {
+      const [tr, setTr] = useState({ state: 'loading', text: '' });
+      const [nlpState, setNlpState] = useState({ state: 'loading', clauses: [], verbs: [] });
+
+      useEffect(() => {
+        let alive = true;
+        translateSentence(sentence).then(t => alive && setTr({ state: 'ok', text: t })).catch(e => alive && setTr({ state: 'error', text: e.message }));
+        loadNlp().then(nlp => {
+          if (!alive) return;
+          const doc = nlp(sentence);
+          const clauses = doc.clauses().out('array').map(s => s.trim()).filter(Boolean);
+          const verbs = doc.verbs().out('array').map(v => v.toLowerCase());
+          setNlpState({ state: 'ok', clauses: clauses.length ? clauses : [sentence], verbs });
+        }).catch(e => alive && setNlpState({ state: 'error', clauses: [sentence], verbs: [], error: e.message }));
+        const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => { alive = false; window.removeEventListener('keydown', onKey); };
+      }, [sentence]);
+
+      const bank = new Set(cards.map(c => String(c.lemma || c.english).toLowerCase()));
+      const verbWords = new Set(nlpState.verbs.flatMap(v => v.split(/\s+/)));
+      const linkerAt = (low) => [...SUBORDINATORS.map(s => s[0]), ...LINKER_LIST.map(l => l.w)].sort((a, b) => b.length - a.length).find(l => low.startsWith(l + ' ') || low.startsWith(l + ','));
+
+      // Cümleyi renklendir: fiil (mavi), bağlaç (turuncu), AWL (mor), bankadaki kelime (yeşil)
+      const colorize = (text) => {
+        const linkWords = new Set([...SUBORDINATORS.map(s => s[0]), ...LINKER_LIST.map(l => l.w)].filter(w => !w.includes(' ')));
+        return text.split(/([A-Za-z'’-]+)/).map((tok, i) => {
+          if (i % 2 === 0) return tok;
+          const w = tok.toLowerCase();
+          if (linkWords.has(w)) return <b key={i} className="text-orange-300">{tok}</b>;
+          if (verbWords.has(w)) return <b key={i} className="text-sky-300">{tok}</b>;
+          if (bank.has(w) || lemmaCandidates(w).some(x => bank.has(x))) return <span key={i} className="text-emerald-300 underline decoration-dotted">{tok}</span>;
+          if (w.length > 3 && !STOPWORDS.has(w) && awlSublist(w)) return <span key={i} className="underline decoration-purple-400 decoration-2 underline-offset-4">{tok}</span>;
+          return tok;
+        });
+      };
+
+      const passives = [...sentence.matchAll(PASSIVE_RE)].map(m => m[0]);
+      const linkersFound = LINKER_LIST.filter(L => new RegExp('\\b' + escRe(L.w) + '\\b', 'i').test(sentence));
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+          <div role="dialog" aria-label="Cümle analizi" onClick={e => e.stopPropagation()} className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-5 space-y-4">
+            <div className="flex items-start gap-2">
+              <h3 className="font-bold text-base text-white mr-auto">📝 Cümle Analizi</h3>
+              <button onClick={() => speakText(sentence)} className="px-2 py-1 rounded-md text-blue-400 hover:bg-slate-800 text-xs">🔊 Dinle</button>
+              <button onClick={onClose} aria-label="Kapat" className="px-2 py-1 rounded-md text-slate-400 hover:bg-slate-800">✕</button>
+            </div>
+
+            <p className="text-base text-slate-100 font-serif leading-relaxed">{colorize(sentence)}</p>
+            <p className="text-[10px] text-slate-500"><b className="text-sky-300">fiil</b> · <b className="text-orange-300">bağlaç</b> · <span className="underline decoration-purple-400">akademik kelime</span> · <span className="text-emerald-300">bankanızda</span></p>
+
+            <div className="p-3 rounded-xl bg-slate-950 border border-slate-800">
+              <p className="text-[11px] text-slate-500 mb-1">Türkçe çeviri (otomatik, MyMemory)</p>
+              <p className={"text-sm " + (tr.state === 'error' ? 'text-amber-400' : 'text-blue-200')}>{tr.state === 'loading' ? 'Çevriliyor…' : tr.text}</p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-slate-300">Cümlenin parçaları</p>
+              {nlpState.state === 'loading' && <p className="text-xs text-slate-500">Analiz ediliyor…</p>}
+              {nlpState.state === 'error' && <p className="text-xs text-amber-400">Analiz kütüphanesi yüklenemedi; yalnızca çeviri gösteriliyor.</p>}
+              {nlpState.state === 'ok' && nlpState.clauses.map((c, i) => {
+                const low = c.toLowerCase().replace(/^[,;:\s]+/, '');
+                const sub = SUBORDINATORS.find(s => low.startsWith(s[0] + ' ') || low.startsWith(s[0] + ','));
+                const lnk = !sub && LINKER_LIST.find(L => low.startsWith(L.w + ' ') || low.startsWith(L.w + ','));
+                const role = sub ? sub[1] : lnk ? 'Bağlaçla başlayan cümle (' + lnk.cat + ')' : (i === 0 || !nlpState.clauses.some((x, k) => k < i && !SUBORDINATORS.some(s => x.toLowerCase().startsWith(s[0] + ' '))) ? 'Ana cümle' : 'Cümle devamı');
+                return (
+                  <div key={i} className={"p-3 rounded-xl border " + (sub ? 'border-orange-900/60 bg-orange-950/20' : 'border-sky-900/60 bg-sky-950/20')}>
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">{role}{sub && <span className="normal-case font-normal text-slate-500"> — Türkçede: {sub[2]}</span>}</p>
+                    <p className="text-sm text-slate-100 font-serif mt-0.5">{colorize(c)}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {(passives.length > 0 || linkersFound.length > 0) && (
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1 text-[11px] text-slate-300">
+                {passives.map((p, i) => <p key={'p' + i}>🔁 <b className="text-sky-300">{p}</b> → edilgen yapı (iş yapılıyor/yapıldı; yapan önemli değil). Türkçeye "-ıldı / -ilir" ile çevrilir.</p>)}
+                {linkersFound.map(L => <p key={L.w}>🔗 <b className="text-orange-300">{L.w}</b> → {LINKER_TR[L.cat] || L.cat}</p>)}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     // Okuma ekranında tıklanan kelimenin anlam kutusu (anlam, okunuş, ses, eş/zıt anlam, karta ekle)
-    function WordPopover({ pop, cards, onAdd, onClose }) {
+    function WordPopover({ pop, cards, onAdd, onClose, onAnalyze }) {
       const [info, setInfo] = useState(null);
       const [state, setState] = useState('loading');      // loading | ok | error
       const boxRef = useRef(null);
@@ -2103,6 +2790,7 @@
                 <span className="text-lg font-black text-white">{lemma}</span>
                 {info && info.lemma !== pop.word.toLowerCase() && <span className="text-[10px] text-slate-500">({pop.word})</span>}
                 {info && info.pos && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{info.pos}</span>}
+                <AwlBadge word={lemma} />
               </div>
               {info && (info.ipa || info.okunus) && (
                 <p className="text-[11px] text-slate-400">
@@ -2143,12 +2831,17 @@
             )}
             <TurengLink word={lemma} className="ml-auto" />
           </div>
+          {pop.sentence && onAnalyze && (
+            <button onClick={() => onAnalyze(pop.sentence)} className="w-full mt-1 px-3 py-1.5 rounded-lg bg-slate-800 text-[11px] font-bold text-slate-200 hover:bg-slate-700">
+              📝 Cümleyi çevir ve analiz et
+            </button>
+          )}
         </div>
       );
     }
 
     // Kelime Kartları bölümü: çevrilebilir kartlar, Tureng bağlantısı ve kart üzerinde anlam düzenleme
-    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete }) {
+    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete, onAudio }) {
       const [query, setQuery] = useState('');
       const [autoFill, setAutoFill] = useState(null);     // { done, total } otomatik anlam bulma sürerken
       const [refreshingId, setRefreshingId] = useState(null);
@@ -2235,6 +2928,7 @@
               <option value="missing">Anlamı eksik olanlar ({missingCount})</option>
               {readingTitles.map(t => <option key={t} value={'r:' + t}>Metin: {t}</option>)}
             </select>
+            {onAudio && <button onClick={onAudio} disabled={!cards.length} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-xs font-bold text-white disabled:opacity-40">🎧 Dinleyerek çalış</button>}
             <button onClick={shuffle} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">🔀 Karıştır</button>
             <button
               onClick={() => setFlipped(allFlipped ? new Set() : new Set(list.map(c => c.id)))}
@@ -2394,7 +3088,8 @@
           if (runId.current !== my) return;
           if (!cands.length) { setPhase('done'); return; }
           // Bankada olmayanlar önce; aralarında daha az yaygın (daha "akademik") olanlar önce
-          cands.sort((a, b) => (existing.has(a.lemma) - existing.has(b.lemma)) || (a.freq - b.freq));
+          // Akademik kelimeler (AWL) önce, sonra daha az yaygın olanlar
+          cands.sort((a, b) => (existing.has(a.lemma) - existing.has(b.lemma)) || ((awlSublist(a.lemma) ? 0 : 1) - (awlSublist(b.lemma) ? 0 : 1)) || (a.freq - b.freq));
           const chosen = cands.slice(0, limit);
           setItems(chosen.map(c => ({ ...c, checked: !existing.has(c.lemma), loading: true })));
           setPhase('details');
@@ -2545,6 +3240,7 @@
                           {x.okunus && <span className="text-[11px] text-amber-300" title="Türkçe harflerle okunuş (büyük harfli hece vurgulu)">[{x.okunus}]</span>}
                           {x.partOfSpeech && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{x.partOfSpeech}</span>}
                           <span className={"text-[10px] font-bold px-1.5 py-0.5 rounded " + lvl.cls}>{lvl.label}</span>
+                          <AwlBadge word={x.lemma} />
                           <span className="text-[10px] text-slate-500">metinde {x.count}×</span>
                           {inBank && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300">Bankada var</span>}
                         </div>
@@ -3529,6 +4225,12 @@
 
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<Root />);
+
+    // Çevrimdışı çalışma + "Ana ekrana ekle" (PWA). Dosyadan (file://) açıldığında service worker çalışmaz.
+    if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+      const registerSW = () => navigator.serviceWorker.register('./sw.js').catch(e => console.warn('Service worker kaydedilemedi:', e));
+      if (document.readyState === 'complete') registerSW(); else window.addEventListener('load', registerSW);
+    }
   </script>
 </body>
 </html>
