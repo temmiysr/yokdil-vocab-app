@@ -757,11 +757,24 @@
       return 'Giriş yapılamadı: ' + ((e && e.message) || c || 'bilinmeyen hata');
     };
 
-    function SyncPanel({ sync }) {
+    // Yedek indir / yükle: farklı adreslerde (localhost, dosya, github.io) tutulan verileri taşımak için
+    function BackupLinks({ onExport, onImport }) {
+      const inputRef = useRef(null);
+      return (
+        <div className="flex items-center gap-2 pt-1 border-t border-slate-800 mt-1">
+          <button onClick={onExport} className="text-[10px] text-blue-400 hover:text-blue-300 underline" title="Tüm haftaları, metinleri ve kartları bir dosyaya indir">⬇ Yedek indir</button>
+          <button onClick={() => inputRef.current && inputRef.current.click()} className="text-[10px] text-blue-400 hover:text-blue-300 underline" title="Daha önce indirdiğiniz yedek dosyasını ekle (mevcut veriler silinmez)">⬆ Yedek yükle</button>
+          <input ref={inputRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onImport(f); }} />
+        </div>
+      );
+    }
+
+    function SyncPanel({ sync, backup }) {
+      const links = backup ? <BackupLinks onExport={backup.onExport} onImport={backup.onImport} /> : null;
       if (!sync.available) {
-        return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400">☁️ Bulut eşitleme yüklenemedi (internet bağlantısı gerekli).</div>;
+        return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400">☁️ Bulut eşitleme yüklenemedi (internet bağlantısı gerekli).{links}</div>;
       }
-      if (!sync.authReady) return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-500">☁️ Kontrol ediliyor…</div>;
+      if (!sync.authReady) return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-500">☁️ Kontrol ediliyor…{links}</div>;
       if (!sync.user) {
         return (
           <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-2">
@@ -771,6 +784,7 @@
               Google ile giriş yap
             </button>
             {sync.error && <p className="text-red-400">{sync.error}</p>}
+            {links}
           </div>
         );
       }
@@ -787,6 +801,7 @@
           <p role="status" className={cls}>☁️ {label}</p>
           {sync.error && <p className="text-red-400">{sync.error}</p>}
           <button onClick={sync.signOut} className="text-[10px] text-slate-500 hover:text-slate-300 underline">Çıkış yap (veriler bu cihazda kalır)</button>
+          {links}
         </div>
       );
     }
@@ -799,6 +814,46 @@
       const [cards, setCards] = useState(() => getStored(STORAGE_KEYS.VOCAB, []));
       // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler ve kartlar tüm cihazlarda aynı olur)
       const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards });
+
+      // --- Yedek indir / yükle ---
+      const exportBackup = () => {
+        const payload = { app: 'yokdil-master', version: 1, exportedAt: new Date().toISOString(), weeks, readings, cards };
+        const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'yokdil-yedek-' + new Date().toISOString().slice(0, 10) + '.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showToast('Yedek indirildi: ' + weeks.length + ' hafta, ' + readings.length + ' metin, ' + cards.length + ' kart.');
+      };
+
+      // Yedekteki öğeler mevcutlarla birleştirilir (hiçbir şey silinmez); aynı öğe varsa daha yeni olan kalır
+      const importBackup = async (file) => {
+        try {
+          const data = JSON.parse(await file.text());
+          if (!data || (data.app && data.app !== 'yokdil-master') || !Array.isArray(data.cards || []) ) throw new Error('Bu dosya bir YÖKDİL Master yedeği değil.');
+          const stamp = (x) => Date.parse(x.updatedAt || x.createdAt || x.dateAdded || 0) || 0;
+          const mergeList = (cur, inc) => {
+            const map = new Map(cur.map(x => [String(x.id), x]));
+            let added = 0, updated = 0;
+            (inc || []).filter(x => x && x.id != null).forEach(x => {
+              const id = String(x.id), ex = map.get(id);
+              if (!ex) { map.set(id, x); added++; }
+              else if (stamp(x) > stamp(ex) && JSON.stringify(x) !== JSON.stringify(ex)) { map.set(id, x); updated++; }
+            });
+            const incIds = new Set((inc || []).map(x => String(x.id)));
+            const newOnes = (inc || []).filter(x => x && !cur.some(c => String(c.id) === String(x.id)));
+            const rest = cur.map(c => map.get(String(c.id)));
+            return { list: [...newOnes, ...rest], added, updated, incIds };
+          };
+          const w = mergeList(weeks, data.weeks), r = mergeList(readings, data.readings), c = mergeList(cards, data.cards);
+          setWeeks(w.list); setReadings(r.list); setCards(c.list);
+          showToast('Yedek yüklendi: ' + w.added + ' hafta, ' + r.added + ' metin, ' + c.added + ' kart eklendi' + ((w.updated + r.updated + c.updated) ? ', ' + (w.updated + r.updated + c.updated) + ' öğe güncellendi' : '') + (sync.user ? '. Buluta eşitleniyor…' : '.'));
+        } catch (e) {
+          showToast('Yedek yüklenemedi: ' + (e instanceof SyntaxError ? 'dosya geçerli bir yedek değil.' : (e && e.message ? e.message : 'dosya okunamadı')), true);
+        }
+      };
       const [settings, setSettings] = useState(() => getStored(STORAGE_KEYS.SETTINGS, {
         theme: 'dark',
         notificationTime: '20:00',
@@ -821,6 +876,7 @@
       const [autoVocabReadingId, setAutoVocabReadingId] = useState(null);
       const [recentCardIds, setRecentCardIds] = useState([]);
       const [toast, setToast] = useState('');
+      const showToast = (msg, isError) => { setToast((isError ? '⚠ ' : '') + msg); setTimeout(() => setToast(''), 6000); };
       const [duplicateCard, setDuplicateCard] = useState(null);
 
       // Metin Seçimi ve Popover
@@ -963,7 +1019,7 @@
               ))}
             </nav>
 
-            <SyncPanel sync={sync} />
+            <SyncPanel sync={sync} backup={{ onExport: exportBackup, onImport: importBackup }} />
           </aside>
 
           {/* Ana İçerik */}
@@ -1424,8 +1480,8 @@
           )}
 
           {toast && (
-            <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-2xl">
-              ✓ {toast}
+            <div role="status" className={"fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl text-white text-xs font-bold shadow-2xl max-w-[90vw] " + (toast.startsWith('⚠') ? 'bg-red-600' : 'bg-emerald-600')}>
+              {toast.startsWith('⚠') ? toast : '✓ ' + toast}
             </div>
           )}
 
