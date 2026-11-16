@@ -443,6 +443,24 @@
       });
       return [...map.values()].sort((a, b) => a.from - b.from);
     }
+    // Yanlışlarım destesi: denemelerde yanlış/boş bırakılan sorular aralıklı tekrarla yeniden sorulur
+    const MISTAKE_DAYS = [1, 3, 7, 21];
+    function mistakeQuestions(exams, onlyDue = true) {
+      const today = getTodayStr();
+      const out = [];
+      (exams || []).forEach(ex => Object.entries(ex.mistakes || {}).forEach(([num, m]) => {
+        if (onlyDue && m.due > today) return;
+        const q = (ex.questions || []).find(x => x.num === +num);
+        if (!q || q.answer < 0) return;
+        out.push({
+          type: qSection(q), prompt: q.prompt || '(Parçadaki (' + q.num + ') numaralı boşluk)', passage: q.passage || '',
+          options: q.options, answer: q.answer, cardIds: [],
+          explain: 'Doğru cevap: ' + EXAM_LETTERS[q.answer] + ') ' + q.options[q.answer] + ' · ' + ex.title + ', soru ' + q.num + (m.wrongCount > 1 ? ' · ' + m.wrongCount + '. kez yanlış' : ''),
+          mistakeRef: { examId: ex.id, num: q.num }, due: m.due,
+        });
+      }));
+      return out.sort((a, b) => a.due.localeCompare(b.due));
+    }
     // Kart filtresi: soru tipi ailesi ('Çeviri' iki yönü de kapsar)
     const QTYPE_FILTERS = ['Kelime & Dil Bilgisi', 'Cloze Test', 'Cümle Tamamlama', 'Çeviri', 'Paragraf Tamamlama', 'Okuma'];
     const cardMatchesQType = (c, f) => {
@@ -470,7 +488,7 @@
     }
 
     // Sayfa başlığı/altlığı gibi soruya ait olmayan satırlar
-    const EXAM_NOISE_LINE = /^\s*(\d{1,3}|diğer sayfaya geçiniz\.?|.*soru kitapçığı.*|ösym|yökdil\s*[\/\-–].*|test bitt[iİ].*|cevaplarınızı kontrol ediniz.*|bu testte \d+ soru vardır\.?)\s*$/i;
+    const EXAM_NOISE_LINE = /^\s*(\d{1,3}|diğer sayfaya geçiniz\.?|.*soru kitapçığı.*|ösym|yökdil\s*[\/\-–].*|test b[iİ]tt[iİ].*|cevaplarınızı kontrol ediniz.*|bu testte \d+ soru vardır\.?)\s*$/i;
     const EXAM_GROUP_LINE = /^\s*(\d{1,2})\s*\.?\s*[-–—]\s*(\d{1,2})\s*\.?\s*sorular/i;
 
     // Şıkları bulur: yalnızca BÜYÜK harf "A)"–"E)" ve sırayla (A→B→C→D→E). "e.g." gibi ifadeler şık sanılmaz.
@@ -505,7 +523,8 @@
       let keySection = '';
       for (const m of src.matchAll(/cevap\s+anahtar[ıi]/gi)) {
         const after = src.slice(m.index + m[0].length, m.index + m[0].length + 800);
-        if ((after.match(/(?:^|\s)\d{1,2}\s*[-.:)]?\s*[A-E](?![A-Za-z])/g) || []).length >= 8) {
+        // "1. E 2. C …": harften sonra hemen bir sonraki numara gelir ("15. A gemstone…" gibi soru başları sayılmaz)
+        if ((after.match(/(?:^|\s)\d{1,2}\s*[-.:)]?\s*[A-E](?=\s*(?:\d|$))/g) || []).length >= 4) {
           keySection = src.slice(m.index + m[0].length);
           src = src.slice(0, m.index);
           break;
@@ -697,19 +716,25 @@
           const out = [];
           let band = { left: [], right: [] };
           const pushCol = (col) => {
-            let lastY = null;
-            col.forEach(({ y, h, text }) => {
+            let lastY = null, prev = null;
+            col.forEach(({ y, h, x, text }) => {
               if (!text) return;
-              if (lastY !== null && y - lastY > h * 1.9) out.push('');
-              out.push(text); lastY = y;
+              const gap = lastY !== null && y - lastY > h * 1.9;
+              if (gap) out.push('');
+              // Satır başındaki boşluk (----) PDF'te metin olarak yok; satır bir üstündekinden belirgin içeride başlıyorsa boşluk var demektir
+              // (şık devam satırları ~18 pt içeride başlar, boşluk çizgisi ~35 pt)
+              let t = text;
+              if (prev && !gap && x - prev.x > 25 && !/^[A-E]\)/.test(t) && !/^[A-E]\)/.test(prev.text) && !/^-{3,}/.test(t)) t = '---- ' + t;
+              out.push(t); lastY = y; prev = { x, text };
             });
           };
           const flushBand = () => { pushCol(band.left); pushCol(band.right); band = { left: [], right: [] }; };
           for (const r of rows) {
             if (spans(r)) { flushBand(); out.push(joinItems(r.items)); continue; }
             const L = r.items.filter(t => t.x + t.w / 2 < mid), R = r.items.filter(t => t.x + t.w / 2 >= mid);
-            if (L.length) band.left.push({ y: r.y, h: r.h, text: joinItems(L) });
-            if (R.length) band.right.push({ y: r.y, h: r.h, text: joinItems(R) });
+            const minX = (arr) => Math.min(...arr.filter(t => t.s.trim()).map(t => t.x).concat([1e9]));
+            if (L.length) band.left.push({ y: r.y, h: r.h, x: minX(L), text: joinItems(L) });
+            if (R.length) band.right.push({ y: r.y, h: r.h, x: minX(R), text: joinItems(R) });
           }
           flushBand();
           pages.push(out);
@@ -722,7 +747,7 @@
       const freq = new Map();
       pages.forEach(lines => new Set(lines.map(norm)).forEach(k => k && freq.set(k, (freq.get(k) || 0) + 1)));
       const minRep = Math.max(3, Math.ceil(pages.length * 0.25));
-      const isRepeated = (l) => l.trim() && !/^\s*([A-E]\)|\d{1,2}\s*[.)])/.test(l) && (freq.get(norm(l)) || 0) >= minRep;
+      const isRepeated = (l) => l.replace(/[^A-Za-zÇĞİÖŞÜçğıöşü]/g, '').length >= 4 && !/^\s*([A-E]\)|\d{1,2}\s*[.)])/.test(l) && (freq.get(norm(l)) || 0) >= minRep;
       return { text: pages.map(lines => lines.filter(l => !isRepeated(l)).join('\n')).join('\n\n'), pages: pdf.numPages, ocrPages };
     }
 
@@ -1340,7 +1365,33 @@
           <button onClick={onExport} className="text-[10px] text-blue-400 hover:text-blue-300 underline" title="Tüm haftaları, metinleri ve kartları bir dosyaya indir">⬇ Yedek indir</button>
           <button onClick={() => inputRef.current && inputRef.current.click()} className="text-[10px] text-blue-400 hover:text-blue-300 underline" title="Daha önce indirdiğiniz yedek dosyasını ekle (mevcut veriler silinmez)">⬆ Yedek yükle</button>
           <input ref={inputRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) onImport(f); }} />
+          <PrivacyLink />
         </div>
+      );
+    }
+
+    // Gizlilik notu (siteyi başkaları da kullanabildiği için)
+    function PrivacyLink() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)} className="text-[10px] text-slate-400 hover:text-slate-200 underline ml-auto">🔒 Gizlilik</button>
+          {open && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setOpen(false)}>
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-lg w-full space-y-2 text-xs text-slate-300 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <h3 className="font-bold text-base text-white">🔒 Gizlilik</h3>
+                <p><b className="text-white">Giriş yapmadan:</b> kartlarınız, metinleriniz ve denemeleriniz yalnızca bu tarayıcıda saklanır; hiçbir sunucuya gönderilmez.</p>
+                <p><b className="text-white">Google ile giriş yapınca:</b> aynı veriler cihazlarınız arasında eşitlensin diye Google Firebase'de yalnızca sizin hesabınıza ayrılmış bölümde saklanır. Bu bölümü sizden başka kimse okuyamaz. Girişte yalnızca Google hesabınızın kimliği, adı ve e-postası kullanılır.</p>
+                <p><b className="text-white">Herkese açık kütüphane:</b> yalnızca sizin "Paylaş" dediğiniz listeler ve denemeler herkese açılır; adınız ve e-postanız gösterilmez, tekrar geçmişiniz ve cevaplarınız paylaşılmaz. Paylaşımı istediğiniz zaman kaldırabilirsiniz.</p>
+                <p><b className="text-white">Yüklediğiniz dosyalar</b> (PDF, Word, resim) yalnızca bu cihazda okunur; dosyanın kendisi hiçbir yere gönderilmez.</p>
+                <p><b className="text-white">Dış hizmetler:</b> kelime anlamı ve okunuş için yalnızca İngilizce kelime ya da cümle; sözlük ve çeviri servislerine (Datamuse, dictionaryapi.dev, Wiktionary, MyMemory) gönderilir. "Claude ile" özellikleri yalnızca siz kullanırsanız, soru ya da cümle kendi API anahtarınızla doğrudan Anthropic'e gönderilir; anahtar yalnızca bu tarayıcıda saklanır.</p>
+                <p><b className="text-white">Silme:</b> "⬇ Yedek indir" ile verilerinizin kopyasını alabilir, kartları ve denemeleri uygulama içinden silebilirsiniz. Hesabınızın buluttaki verilerinin tamamen silinmesini isterseniz site sahibine yazın.</p>
+                <p className="text-slate-500">Reklam ya da izleme (analitik) kullanılmaz.</p>
+                <button onClick={() => setOpen(false)} className="mt-2 px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-200">Kapat</button>
+              </div>
+            </div>
+          )}
+        </>
       );
     }
 
@@ -1478,6 +1529,8 @@
       // Modallar ve Detay Durumları
       const [selectedWeekId, setSelectedWeekId] = useState(null);
       const [selectedReadingId, setSelectedReadingId] = useState(null);
+      // Günlük plan için: bugün bir okuma parçası açıldı mı?
+      useEffect(() => { if (selectedReadingId) logActivity({ readingsOpened: 1 }); }, [selectedReadingId]);
       const [isVocabModalOpen, setIsVocabModalOpen] = useState(false);
       const [editingCard, setEditingCard] = useState(null);
       const [initialWord, setInitialWord] = useState('');
@@ -1702,6 +1755,42 @@
         if (newCards.length) { setCards(prev => [...prev, ...newCards]); setSettings(st => ({ ...st, listReleaseDay: today })); }
         showToast('"' + s.title + '": ' + newCards.length + ' yeni kelime eklendi' + (newCards.length > 20 ? ' (20 tanesi bugün tekrarda, kalanlar her gün ' + (settings.dailyListNew == null ? 10 : settings.dailyListNew) + ' tane eklenecek)' : '') + (rows.length - fresh.length ? '; ' + (rows.length - fresh.length) + ' tanesi zaten bankanızdaydı' : '') + '.');
         return newCards.length;
+      };
+      // Denemedeki okuma / cloze parçalarını "Okuma Parçalarım"a aktar (tıkla-anlam, kalıp, Bionic okuma için)
+      const passagesToReadings = (ex) => {
+        const groups = [];
+        [...(ex.questions || [])].sort((a, b) => a.num - b.num).forEach(q => {
+          if (!q.passage) return;
+          const g = groups.find(x => x.text === q.passage);
+          if (g) g.to = q.num; else groups.push({ text: q.passage, from: q.num, to: q.num, type: qSection(q) });
+        });
+        const have = new Set(readings.map(r => r.content));
+        const now = new Date().toISOString();
+        const fresh = groups.filter(g => !have.has(g.text)).map((g, i) => ({
+          id: 'reading_' + Date.now() + '_' + i,
+          title: ex.title + ' · ' + g.type + ' (Soru ' + g.from + (g.to !== g.from ? '-' + g.to : '') + ')',
+          content: g.text, weekId: (weeks[0] && weeks[0].id) || '', category: ex.field || 'Genel',
+          wordCount: g.text.split(/\s+/).filter(Boolean).length, savedWordIds: [], fileType: 'exam', sourceExamId: ex.id, dateAdded: now,
+        }));
+        if (!groups.length) { showToast('Bu denemede okuma ya da cloze parçası yok.'); return; }
+        if (!fresh.length) { showToast('Bu denemenin parçaları zaten Okuma Parçalarım\'da.'); return; }
+        setReadings(prev => [...fresh, ...prev]);
+        showToast(fresh.length + ' parça Okuma Parçalarım\'a eklendi. Kelimeye tıklayınca anlamı görünür.');
+      };
+      // Yanlışlarım: doğru → bir sonraki kutu (1, 3, 7, 21 gün; 4. doğrudan sonra deste dışı), yanlış → yarın tekrar
+      const mistakeResult = (ref, ok) => {
+        const today = getTodayStr();
+        setCustomExams(prev => prev.map(e => {
+          if (e.id !== ref.examId || !(e.mistakes || {})[ref.num]) return e;
+          const mistakes = { ...e.mistakes };
+          const m = mistakes[ref.num];
+          if (ok) {
+            const box = (m.box || 0) + 1;
+            if (box >= MISTAKE_DAYS.length) delete mistakes[ref.num];
+            else mistakes[ref.num] = { ...m, box, due: addDays(today, MISTAKE_DAYS[box]) };
+          } else mistakes[ref.num] = { ...m, box: 0, due: addDays(today, 1), wrongCount: (m.wrongCount || 0) + 1 };
+          return { ...e, mistakes, updatedAt: new Date().toISOString() };
+        }));
       };
       const addSharedExam = (s, rows) => {
         const m = s.meta || {};
@@ -1930,6 +2019,15 @@
               {/* ANA SAYFA */}
               {activeTab === 'dashboard' && (
                 <div className="space-y-6">
+                  <DailyPlanCard
+                    due={dueCards.length} todayRec={todayRec} readingsCount={readings.length}
+                    mistakesDue={mistakeQuestions(customExams).length} queued={cards.filter(c => c.queued).length}
+                    perDay={settings.dailyListNew == null ? 10 : settings.dailyListNew}
+                    onReview={() => setActiveTab('daily-review')}
+                    onMistakes={() => { setExamPreset({ mistakes: true }); setActiveTab('study'); }}
+                    onReading={() => setActiveTab('readings')}
+                    onDrill={() => { setExamPreset({ drill: 10 }); setActiveTab('study'); }}
+                  />
                   <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 rounded-3xl p-8 text-white shadow-xl relative overflow-hidden">
                     <h2 className="text-2xl font-black">
                       {dueCards.length > 0 ? `Bugün ${dueCards.length} Kelime Tekrar Bekliyor!` : 'Harika! Bugünkü Tüm Tekrarlarını Tamamladın.'}
@@ -2239,7 +2337,7 @@
 
               {/* İSTATİSTİKLER */}
               {activeTab === 'stats' && (
-                <StatsSection cards={cards} exams={customExams} activity={activity} settings={settings} setSettings={setSettings}
+                <StatsSection cards={cards} exams={customExams} user={sync.user} onSignIn={sync.signIn} activity={activity} settings={settings} setSettings={setSettings}
                               onWeeklyCheckup={() => { setExamPreset({ weekly: true, at: Date.now() }); goTab('study'); }} />
               )}
 
@@ -2273,9 +2371,18 @@
                     graded.forEach(r => { const t = r.section; byType[t] = byType[t] || [0, 0]; byType[t][1]++; if (r.ok) byType[t][0]++; });
                     if (graded.length) logActivity({ examQ: graded.length, examCorrect: correct, realExams: 1 }, byType, { [ex.field || 'Genel']: [correct, graded.length] });
                     const summary = { ...attempt, correct, graded: graded.length, empty: rows.filter(r => r.empty).length };
-                    setCustomExams(prev => prev.map(e => e.id === ex.id ? { ...e, attempts: [summary, ...(e.attempts || [])].slice(0, 10), updatedAt: new Date().toISOString() } : e));
+                    // Yanlış ve boş bırakılan (anahtarı olan) sorular Yanlışlarım destesine: yarın tekrar sorulur
+                    const tomorrow = addDays(getTodayStr(), 1);
+                    setCustomExams(prev => prev.map(e => {
+                      if (e.id !== ex.id) return e;
+                      const mistakes = { ...(e.mistakes || {}) };
+                      graded.filter(r => !r.ok).forEach(r => { const m = mistakes[r.num] || {}; mistakes[r.num] = { box: 0, due: tomorrow, wrongCount: (m.wrongCount || 0) + 1 }; });
+                      return { ...e, mistakes, attempts: [summary, ...(e.attempts || [])].slice(0, 10), updatedAt: new Date().toISOString() };
+                    }));
                   }}
                   onExtractVocabFromExam={handleExtractVocabFromExam}
+                  onMistakeResult={mistakeResult}
+                  onPassagesToReadings={passagesToReadings}
                   onShareExam={shareExam}
                   onOpenLibrary={() => setLibraryKind('exam')}
                   onAnswer={(type, ok) => logActivity({ examQ: 1, examCorrect: ok ? 1 : 0 }, { [type]: [ok ? 1 : 0, 1] })}
@@ -2816,6 +2923,177 @@
       );
     }
 
+    // Ana sayfadaki "Bugün" kartı: günün işleri ve ilerleme
+    function DailyPlanCard({ due, todayRec, readingsCount, mistakesDue, queued, perDay, onReview, onMistakes, onReading, onDrill }) {
+      const reviewed = todayRec.reviews || 0;
+      const tasks = [
+        { key: 'review', icon: '🔄', label: due > 0 ? 'Kelime tekrarı: ' + due + ' kart kaldı' : reviewed ? 'Kelime tekrarı bitti (' + reviewed + ' kart)' : 'Bugün tekrar edilecek kart yok', done: due === 0, onClick: onReview, btn: 'Başla',
+          sub: queued > 0 ? 'Listelerden her gün ' + perDay + ' yeni kelime ekleniyor · sırada ' + queued : '' },
+        { key: 'mistakes', icon: '📕', label: mistakesDue > 0 ? 'Yanlışlarım: ' + mistakesDue + ' soru' : 'Yanlışlarım: bugün tekrar yok', done: mistakesDue === 0, onClick: onMistakes, btn: 'Çöz' },
+        { key: 'reading', icon: '📖', label: (todayRec.readingsOpened || 0) > 0 ? 'Okuma: bugün bir parça okundu' : 'Okuma: 1 parça oku', done: (todayRec.readingsOpened || 0) > 0, onClick: onReading, btn: 'Aç', disabled: !readingsCount,
+          sub: readingsCount ? '' : 'Önce bir metin yükleyin ya da denemedeki parçaları okumaya aktarın' },
+        { key: 'drill', icon: '🎯', label: 'Soru çözümü: ' + Math.min(todayRec.examQ || 0, 10) + ' / 10', done: (todayRec.examQ || 0) >= 10, onClick: onDrill, btn: 'Başla' },
+      ];
+      const doneN = tasks.filter(t => t.done).length;
+      return (
+        <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="font-black text-base text-white">📋 Bugün</h3>
+            <span className={"text-xs font-bold " + (doneN === tasks.length ? 'text-emerald-400' : 'text-slate-400')}>{doneN === tasks.length ? '✓ Günün planı tamam!' : doneN + ' / ' + tasks.length + ' tamamlandı'}</span>
+          </div>
+          <div className="h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-emerald-500 transition-all" style={{ width: (doneN / tasks.length * 100) + '%' }} /></div>
+          <div className="grid gap-2">
+            {tasks.map(t => (
+              <div key={t.key} className={"flex items-center gap-3 p-2.5 rounded-xl border " + (t.done ? 'border-emerald-900/50 bg-emerald-950/20' : 'border-slate-800 bg-slate-900/50')}>
+                <span className="text-lg">{t.done ? '✅' : t.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <p className={"text-xs font-bold " + (t.done ? 'text-emerald-300' : 'text-white')}>{t.label}</p>
+                  {t.sub && <p className="text-[10px] text-slate-500">{t.sub}</p>}
+                </div>
+                {!t.done && <button onClick={t.onClick} disabled={t.disabled} className="px-3 py-1.5 rounded-lg bg-blue-600 text-[11px] font-bold text-white hover:bg-blue-500 disabled:opacity-40">{t.btn}</button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // --- ÇALIŞMA GRUPLARI ---
+    // groups/{kod} = { name, createdBy, createdAt } ; groups/{kod}/members/{uid} = { nick, week, reviews, examQ, examCorrect, streak, updatedAt }
+    // Yalnızca takma ad ve bu haftanın sayıları paylaşılır; kartlar, metinler, e-posta paylaşılmaz.
+    const weekStart = (d = getTodayStr()) => { const dt = new Date(d + 'T00:00:00'); const dow = (dt.getDay() + 6) % 7; return addDays(d, -dow); };
+    function weekStats(activity) {
+      const ws = weekStart();
+      const days = activity.filter(a => a.id >= ws);
+      const sum = (k) => days.reduce((s, a) => s + (a[k] || 0), 0);
+      return { week: ws, reviews: sum('reviews'), examQ: sum('examQ'), examCorrect: sum('examCorrect'), streak: computeStreak(activity), activeDays: days.filter(a => (a.reviews || 0) + (a.examQ || 0) > 0).length };
+    }
+    const newGroupCode = () => { const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 6; i++) s += A[Math.floor(Math.random() * A.length)]; return s; };
+
+    function StudyGroups({ user, activity, settings, setSettings, onSignIn }) {
+      const groups = settings.groups || [];
+      const [nick, setNick] = useState(settings.groupNick || '');
+      const [name, setName] = useState('');
+      const [code, setCode] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [err, setErr] = useState('');
+      const [boards, setBoards] = useState({});      // kod → üyeler
+      const mine = weekStats(activity);
+      const db = () => { const fb = getFirebase(); if (!fb) throw new Error('Firebase yüklenemedi.'); return fb.db; };
+      const pushMine = async (codes) => {
+        for (const c of codes) await db().collection('groups').doc(c).collection('members').doc(user.uid).set({ nick: settings.groupNick || nick, ...mine, updatedAt: Date.now() });
+      };
+      const loadBoards = async () => {
+        const out = {};
+        for (const g of groups) {
+          try {
+            const s = await db().collection('groups').doc(g.code).collection('members').get();
+            out[g.code] = s.docs.map(d => ({ uid: d.id, ...d.data() }));
+          } catch (e) { out[g.code] = { error: publicError(e) }; }
+        }
+        setBoards(out);
+      };
+      // Kendi haftalık sayılarını gönder (değiştikçe, en çok dakikada bir) ve sıralamayı yükle
+      const lastPush = useRef('');
+      useEffect(() => {
+        if (!user || !groups.length) return;
+        const sig = JSON.stringify(mine) + (settings.groupNick || '');
+        if (sig === lastPush.current) return;
+        const t = setTimeout(async () => {
+          try { await pushMine(groups.map(g => g.code)); lastPush.current = sig; await loadBoards(); } catch (e) { setErr(publicError(e)); }
+        }, 1500);
+        return () => clearTimeout(t);
+      }, [user && user.uid, groups.length, mine.reviews, mine.examQ, settings.groupNick]);
+      useEffect(() => { if (user && groups.length) loadBoards(); }, [user && user.uid, groups.length]);
+
+      const saveNick = () => { const n = nick.trim().slice(0, 24); if (n) setSettings(s => ({ ...s, groupNick: n })); return n; };
+      const create = async () => {
+        const n = saveNick(); if (!n) { setErr('Önce bir takma ad yazın.'); return; }
+        setBusy(true); setErr('');
+        try {
+          const c = newGroupCode();
+          await db().collection('groups').doc(c).set({ name: name.trim().slice(0, 60) || 'Çalışma grubu', createdBy: user.uid, createdAt: Date.now() });
+          await db().collection('groups').doc(c).collection('members').doc(user.uid).set({ nick: n, ...mine, updatedAt: Date.now() });
+          setSettings(s => ({ ...s, groupNick: n, groups: [...(s.groups || []), { code: c, name: name.trim() || 'Çalışma grubu' }] }));
+          setName('');
+        } catch (e) { setErr(publicError(e)); } finally { setBusy(false); }
+      };
+      const join = async () => {
+        const n = saveNick(); if (!n) { setErr('Önce bir takma ad yazın.'); return; }
+        const c = code.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(c)) { setErr('Grup kodu 6 karakterdir (ör. K7M2QX).'); return; }
+        if (groups.some(g => g.code === c)) { setErr('Bu gruptasınız.'); return; }
+        setBusy(true); setErr('');
+        try {
+          const g = await db().collection('groups').doc(c).get();
+          if (!g.exists) throw new Error('Bu kodla bir grup bulunamadı.');
+          await db().collection('groups').doc(c).collection('members').doc(user.uid).set({ nick: n, ...mine, updatedAt: Date.now() });
+          setSettings(s => ({ ...s, groupNick: n, groups: [...(s.groups || []), { code: c, name: g.data().name || 'Çalışma grubu' }] }));
+          setCode('');
+        } catch (e) { setErr(publicError(e)); } finally { setBusy(false); }
+      };
+      const leave = async (c) => {
+        if (!window.confirm('Gruptan ayrılmak istiyor musunuz? Sıralamadan adınız kaldırılır.')) return;
+        try { await db().collection('groups').doc(c).collection('members').doc(user.uid).delete(); } catch (e) {}
+        setSettings(s => ({ ...s, groups: (s.groups || []).filter(g => g.code !== c) }));
+      };
+
+      return (
+        <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h4 className="text-sm font-bold text-white">👥 Çalışma grubu</h4>
+            <span className="text-[11px] text-slate-400">Bu hafta: {mine.reviews} tekrar · {mine.examQ} soru</span>
+          </div>
+          <p className="text-[11px] text-slate-500">Arkadaşlarınızla bir grup kurup haftalık sıralama tutun. Yalnızca takma adınız ve bu haftanın sayıları (tekrar, soru, doğru oranı, seri) paylaşılır; kartlarınız, metinleriniz ve e-postanız paylaşılmaz.</p>
+          {!user ? (
+            <button onClick={onSignIn} className="px-3 py-1.5 rounded-lg bg-blue-600 text-xs font-bold text-white">Grup için Google ile giriş yap</button>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <input value={nick} onChange={e => setNick(e.target.value)} onBlur={saveNick} placeholder="Takma adınız" aria-label="Takma ad" className="w-36 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white" />
+                <input value={name} onChange={e => setName(e.target.value)} placeholder="Yeni grup adı" aria-label="Yeni grup adı" className="w-36 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white" />
+                <button disabled={busy} onClick={create} className="px-3 py-1.5 rounded-lg bg-blue-600 text-xs font-bold text-white disabled:opacity-50">Grup kur</button>
+                <span className="text-[11px] text-slate-600">ya da</span>
+                <input value={code} onChange={e => setCode(e.target.value)} placeholder="Grup kodu" aria-label="Grup kodu" className="w-24 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono uppercase" />
+                <button disabled={busy} onClick={join} className="px-3 py-1.5 rounded-lg bg-slate-700 text-xs font-bold text-white disabled:opacity-50">Katıl</button>
+              </div>
+              {err && <p className="text-[11px] text-red-300">⚠ {err}</p>}
+              {groups.map(g => {
+                const b = boards[g.code];
+                const ws = weekStart();
+                const rows = Array.isArray(b) ? b.map(m => m.week === ws ? m : { ...m, reviews: 0, examQ: 0, examCorrect: 0 }).sort((x, y) => (y.reviews + y.examQ) - (x.reviews + x.examQ)) : [];
+                return (
+                  <div key={g.code} className="p-3 rounded-xl bg-slate-900 border border-slate-800 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-bold text-white mr-auto">{g.name} <span className="font-mono text-slate-400">· kod {g.code}</span></p>
+                      <button onClick={() => { try { navigator.clipboard.writeText(g.code); } catch (e) {} }} className="text-[10px] text-blue-400 hover:underline">Kodu kopyala</button>
+                      <button onClick={loadBoards} className="text-[10px] text-slate-400 hover:underline">↻</button>
+                      <button onClick={() => leave(g.code)} className="text-[10px] text-red-400 hover:underline">Ayrıl</button>
+                    </div>
+                    {b && b.error && <p className="text-[11px] text-red-300">⚠ {b.error}</p>}
+                    {!b && <p className="text-[11px] text-slate-500">Yükleniyor…</p>}
+                    {rows.length > 0 && (
+                      <table className="w-full text-[11px]">
+                        <thead><tr className="text-slate-500 text-left"><th className="py-0.5">#</th><th>Takma ad</th><th>Tekrar</th><th>Soru</th><th>Doğru</th><th>Seri</th></tr></thead>
+                        <tbody>
+                          {rows.map((m, i) => (
+                            <tr key={m.uid} className={"border-t border-slate-800 " + (m.uid === user.uid ? 'text-blue-300 font-bold' : 'text-slate-300')}>
+                              <td className="py-1">{i === 0 && (m.reviews + m.examQ) > 0 ? '🏆' : i + 1}</td><td>{m.nick}</td><td>{m.reviews}</td><td>{m.examQ}</td><td>{m.examQ ? '%' + Math.round(m.examCorrect / m.examQ * 100) : '—'}</td><td>{m.streak || 0} gün</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
+              {groups.length > 0 && <p className="text-[10px] text-slate-600">Hafta pazartesi başlar. Kodu arkadaşlarınıza gönderin; grubu başka bir cihazda görmek için orada da aynı kodla katılın.</p>}
+            </>
+          )}
+        </div>
+      );
+    }
+
     // 365 günlük çalışma ısı haritası (GitHub tarzı: sütunlar haftalar, satırlar Pzt…Paz)
     function ActivityHeatmap({ activity, cards }) {
       const today = getTodayStr();
@@ -2914,7 +3192,7 @@
       );
     }
 
-    function StatsSection({ cards, activity, settings, setSettings, onWeeklyCheckup, exams }) {
+    function StatsSection({ cards, activity, settings, setSettings, onWeeklyCheckup, exams, user, onSignIn }) {
       const today = getTodayStr();
       const todayRec = activity.find(a => a.id === today) || {};
       const goal = settings.dailyGoal || 20;
@@ -2988,6 +3266,7 @@
 
           <ActivityHeatmap activity={activity} cards={cards} />
           <FieldSuccess activity={activity} exams={exams} />
+          <StudyGroups user={user} activity={activity} settings={settings} setSettings={setSettings} onSignIn={onSignIn} />
 
           {/* Haftalık check-up */}
           {(() => {
@@ -3495,7 +3774,8 @@
       .replace(/\s+/g, ' ')
       .split(/(?<=[.!?])\s+(?=[A-Z"“(])/)
       .map(s => s.trim())
-      .filter(s => s.length >= 40 && s.length <= 320 && !/-{3,}/.test(s));
+      // Bozuk satırları ele (sayfa altlığı, harf harf aralıklı başlıklar)
+      .filter(s => s.length >= 40 && s.length <= 320 && !/-{3,}/.test(s) && !/[·•]|www\.|\.com\b/i.test(s) && (s.match(/(?:^|\s)\p{L}(?=\s|$)/gu) || []).length <= 3 && /[.!?"”)]$/.test(s));
 
     async function genSimilarRule(q, { readings = [], cards = [], exams = [] }, max = 5) {
       const opts = q.options.map(o => (o || '').trim());
@@ -3742,6 +4022,163 @@
       );
     }
 
+    // --- ÇEVİRİ ALIŞTIRMASI ---
+    // Kullanıcı cümleyi kendisi çevirir; Claude (kullanıcının API anahtarıyla) puanlar ve hataları Türkçe açıklar.
+    // Anahtar yoksa: cümle bir deneme sorusundan geliyorsa resmî doğru şık örnek çeviri olarak gösterilir.
+    async function callClaudeJson(apiKey, system, userText, schema, maxTokens = 8000) {
+      const mod = await loadAnthropicSdk();
+      const Anthropic = mod.default || mod.Anthropic;
+      const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+      let res;
+      try {
+        res = await client.beta.messages.create({
+          model: 'claude-opus-5-5',
+          max_tokens: maxTokens,
+          betas: ['server-side-fallback-2026-07-01'],
+          fallbacks: 'default',
+          output_config: { effort: 'medium', format: { type: 'json_schema', schema } },
+          system,
+          messages: [{ role: 'user', content: userText }],
+        });
+      } catch (err) {
+        const status = err && err.status;
+        if ((mod.AuthenticationError && err instanceof mod.AuthenticationError) || status === 401) throw new Error('API anahtarı geçersiz. console.anthropic.com adresinden aldığınız anahtarı kontrol edin.');
+        if ((mod.PermissionDeniedError && err instanceof mod.PermissionDeniedError) || status === 403) throw new Error('Bu API anahtarının bu modele erişim izni yok.');
+        if ((mod.RateLimitError && err instanceof mod.RateLimitError) || status === 429) throw new Error('Çok sık istek gönderildi ya da kota doldu; biraz sonra tekrar deneyin.');
+        if (status === 400 && /credit|balance/i.test(err.message || '')) throw new Error('Anthropic hesabınızda kredi yok (Billing bölümünden yükleyin).');
+        if ((mod.APIConnectionError && err instanceof mod.APIConnectionError) || !status) throw new Error('Claude sunucusuna bağlanılamadı (internet bağlantısını kontrol edin).');
+        throw new Error('Claude hatası (' + status + '): ' + (err.message || ''));
+      }
+      if (res.stop_reason === 'refusal') throw new Error('Claude bu isteği yanıtlamayı reddetti.');
+      if (res.stop_reason === 'max_tokens') throw new Error('Yanıt yarım kaldı; tekrar deneyin.');
+      const block = (res.content || []).find(b => b.type === 'text');
+      if (!block) throw new Error('Claude boş yanıt döndürdü.');
+      return { data: JSON.parse(block.text), usage: res.usage || null };
+    }
+
+    const TRANSLATION_SCHEMA = {
+      type: 'object',
+      properties: {
+        score: { type: 'integer', description: '0-10 overall quality of the learner translation' },
+        verdict_tr: { type: 'string', description: 'One or two sentence overall assessment in Turkish' },
+        mistakes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { part: { type: 'string' }, problem_tr: { type: 'string' }, fix: { type: 'string' } },
+            required: ['part', 'problem_tr', 'fix'], additionalProperties: false,
+          },
+        },
+        model_translation: { type: 'string' },
+        key_vocabulary: {
+          type: 'array',
+          items: { type: 'object', properties: { word: { type: 'string' }, turkish: { type: 'string' } }, required: ['word', 'turkish'], additionalProperties: false },
+        },
+      },
+      required: ['score', 'verdict_tr', 'mistakes', 'model_translation', 'key_vocabulary'],
+      additionalProperties: false,
+    };
+
+    function TranslationPractice({ readings, exams, onBack, onAnswer }) {
+      const [dir, setDir] = useState('en-tr');
+      const pool = useMemo(() => {
+        const out = [];
+        const seen = new Set();
+        const add = (text, src, ref) => { const k = text.toLowerCase(); if (!seen.has(k) && text.length >= 40 && text.length <= 300) { seen.add(k); out.push({ text, src, ref }); } };
+        if (dir === 'en-tr') {
+          (exams || []).forEach(ex => (ex.questions || []).forEach(q => {
+            if (qSection(q) === 'Çeviri (İng→Tr)' && q.prompt) add(q.prompt, ex.title + ', soru ' + q.num, q.answer >= 0 ? q.options[q.answer] : '');
+          }));
+          readings.forEach(r => simSentences(r.content).forEach(s => add(s, r.title, '')));
+          (exams || []).forEach(ex => (ex.questions || []).forEach(q => q.passage && simSentences(q.passage).forEach(s => add(s, ex.title, ''))));
+        } else {
+          (exams || []).forEach(ex => (ex.questions || []).forEach(q => {
+            if (qSection(q) === 'Çeviri (Tr→İng)' && q.prompt) add(q.prompt, ex.title + ', soru ' + q.num, q.answer >= 0 ? q.options[q.answer] : '');
+          }));
+        }
+        return shuffleArr(out);
+      }, [dir, readings.length, (exams || []).length]);
+      const [i, setI] = useState(0);
+      const [text, setText] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [err, setErr] = useState('');
+      const [fb, setFb] = useState(null);
+      const [showRef, setShowRef] = useState(false);
+      const [key, setKey] = useState(getClaudeKey);
+      const [keyOpen, setKeyOpen] = useState(false);
+      useEffect(() => { setI(0); setText(''); setFb(null); setShowRef(false); setErr(''); }, [dir]);
+      const item = pool[i % Math.max(1, pool.length)];
+      const next = () => { setI(i + 1); setText(''); setFb(null); setShowRef(false); setErr(''); };
+      const check = async () => {
+        if (!key) { setKeyOpen(true); return; }
+        setBusy(true); setErr(''); setFb(null);
+        try {
+          const target = dir === 'en-tr' ? 'Turkish' : 'English';
+          const { data, usage } = await callClaudeJson(key,
+            'You are a translation tutor for YÖKDİL, the Turkish academic English exam. The learner is a native Turkish speaker. Grade the learner\'s ' + target + ' translation of the source sentence for meaning accuracy first, then grammar and natural academic style. Be encouraging but precise. List only real mistakes (at most 5), each with the problematic part of the learner text, the problem explained in Turkish, and a corrected version. Give one natural model translation and the 3-6 most useful words from the source with Turkish meanings. All explanations in Turkish.',
+            'Source (' + (dir === 'en-tr' ? 'English' : 'Turkish') + '): ' + item.text + '\n\nLearner translation (' + target + '): ' + text.trim() + (item.ref ? '\n\nOfficial exam answer for reference: ' + item.ref : ''),
+            TRANSLATION_SCHEMA);
+          setFb({ ...data, usage });
+          onAnswer && onAnswer('Çeviri alıştırması', (data.score || 0) >= 7);
+        } catch (e) { setErr(e.message || 'Değerlendirilemedi.'); }
+        finally { setBusy(false); }
+      };
+      return (
+        <div className="max-w-2xl mx-auto space-y-3">
+          <button onClick={onBack} className="text-xs text-slate-400 hover:text-blue-400 font-bold">← Sınav türleri</button>
+          <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-bold text-base text-white mr-auto">✍️ Çeviri alıştırması</h3>
+              {[['en-tr', 'İngilizce → Türkçe'], ['tr-en', 'Türkçe → İngilizce']].map(([k, l]) => (
+                <button key={k} onClick={() => setDir(k)} className={"px-3 py-1.5 rounded-lg text-xs font-bold " + (dir === k ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{l}</button>
+              ))}
+            </div>
+            {!item ? (
+              <p className="text-xs text-amber-300">{dir === 'en-tr' ? 'Çevrilecek cümle yok: okuma metni yükleyin ya da çeviri sorusu olan bir deneme ekleyin.' : 'Türkçe → İngilizce için çeviri sorusu olan bir deneme gerekir (Sınavlar → Çıkmış Sınav / Deneme yükle).'}</p>
+            ) : (
+              <>
+                <div className="p-3 rounded-xl bg-slate-900 border border-slate-800">
+                  <p className="text-sm text-slate-100 font-serif leading-relaxed">{item.text}</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Kaynak: {item.src}</p>
+                </div>
+                <textarea rows={3} value={text} onChange={e => setText(e.target.value)} placeholder={dir === 'en-tr' ? 'Türkçe çevirinizi yazın…' : 'İngilizce çevirinizi yazın…'}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button disabled={busy || text.trim().length < 5} onClick={check} className="px-4 py-2 rounded-lg bg-indigo-600 text-xs font-bold text-white disabled:opacity-50">{busy ? 'Claude değerlendiriyor…' : '✨ Claude ile değerlendir'}</button>
+                  {item.ref && <button onClick={() => setShowRef(!showRef)} className="px-3 py-2 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">{showRef ? 'Örnek çeviriyi gizle' : 'Sınavdaki doğru şıkkı göster'}</button>}
+                  <button onClick={next} className="px-3 py-2 rounded-lg bg-slate-800 text-xs font-bold text-slate-200 ml-auto">Sonraki cümle →</button>
+                  <button type="button" onClick={() => setKeyOpen(!keyOpen)} className="text-[10px] text-slate-400 hover:text-indigo-300">🔑 {key ? 'Anahtar kayıtlı' : 'API anahtarı'}</button>
+                </div>
+                {keyOpen && (
+                  <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 text-[11px] text-slate-400">
+                    <p>Değerlendirme için kendi <b className="text-slate-200">Anthropic API anahtarınız</b> gerekir (console.anthropic.com → API Keys); her değerlendirme hesabınızdan küçük bir ücretle faturalandırılır. Anahtar yalnızca bu tarayıcıda saklanır.</p>
+                    <div className="flex gap-1.5">
+                      <input type="password" autoComplete="off" value={key} onChange={e => setKey(e.target.value.trim())} placeholder="sk-ant-..." className="flex-1 px-2 py-1.5 rounded bg-slate-800 border border-slate-700 text-xs text-white font-mono" />
+                      <button type="button" onClick={() => { setClaudeKey(key); setKeyOpen(false); }} className="px-3 py-1.5 rounded bg-blue-600 text-xs font-bold text-white">Kaydet</button>
+                    </div>
+                  </div>
+                )}
+                {showRef && item.ref && <p className="text-xs text-emerald-200 p-2.5 rounded-lg bg-emerald-950/30 border border-emerald-900/50">Sınavdaki doğru şık: {item.ref}</p>}
+                {err && <p className="text-[11px] text-red-300">⚠ {err}</p>}
+                {fb && (
+                  <div className="p-3 rounded-xl bg-slate-900 border border-indigo-900/50 space-y-2 text-xs">
+                    <p className="font-bold"><span className={fb.score >= 8 ? 'text-emerald-400' : fb.score >= 5 ? 'text-amber-300' : 'text-red-400'}>{fb.score}/10</span> <span className="text-slate-200 font-normal">{fb.verdict_tr}</span></p>
+                    {fb.mistakes.length > 0 && (
+                      <div className="space-y-1">
+                        {fb.mistakes.map((m, k) => <p key={k} className="text-slate-300"><span className="text-red-300 line-through">{m.part}</span> → <span className="text-emerald-300">{m.fix}</span><br /><span className="text-slate-400">{m.problem_tr}</span></p>)}
+                      </div>
+                    )}
+                    <p className="text-slate-300"><b className="text-slate-400">Örnek çeviri:</b> {fb.model_translation}</p>
+                    {fb.key_vocabulary.length > 0 && <p className="text-slate-400">{fb.key_vocabulary.map(v => v.word + ' = ' + v.turkish).join(' · ')}</p>}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     // --- YÜKLENEN ÇIKMIŞ SINAVI ÇÖZME (gerçek sınav düzeni) ---
     // Serbest gezinme, işaretleme, süre; cevap anahtarı olmayan sorular puanlanmaz; sonda bölüm bölüm analiz ve tahmini puan.
     function RealExamRunner({ exam, section, readings, cards, exams, onExit, onFinish, onSetAnswer, onPractice }) {
@@ -3757,6 +4194,16 @@
       const [reviewFilter, setReviewFilter] = useState('wrong');
       const [openTools, setOpenTools] = useState({});     // num → 'similar' | 'meanings'
       useEffect(() => { if (result) return; const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, [result]);
+      // Soru başına süre: ekranda kalınan süre toplanır (soruya geri dönülürse eklenir)
+      const timesRef = useRef({});
+      const enterRef = useRef(Date.now());
+      const [times, setTimes] = useState(null);
+      const flushTime = () => {
+        const q = qsList[idx];
+        if (q) timesRef.current[q.num] = (timesRef.current[q.num] || 0) + (Date.now() - enterRef.current) / 1000;
+        enterRef.current = Date.now();
+      };
+      const goTo = (i) => { flushTime(); setIdx(i); };
       const remaining = Math.max(0, Math.round((endAt - now) / 1000));
       const finish = () => {
         const rows = qsList.map(q => {
@@ -3764,7 +4211,10 @@
           const graded = q.answer >= 0;
           return { num: q.num, section: qSection(q), my: my === undefined ? -1 : my, graded, ok: graded && my === q.answer, empty: my === undefined };
         });
-        const attempt = { at: new Date().toISOString(), section: section == null ? 'all' : section, durationSec: Math.round((Date.now() - startAt) / 1000), answers: Object.fromEntries(rows.filter(r => !r.empty).map(r => [r.num, r.my])) };
+        flushTime();
+        const tm = Object.fromEntries(Object.entries(timesRef.current).map(([k, v]) => [k, Math.round(v)]));
+        setTimes(tm);
+        const attempt = { at: new Date().toISOString(), section: section == null ? 'all' : section, durationSec: Math.round((Date.now() - startAt) / 1000), answers: Object.fromEntries(rows.filter(r => !r.empty).map(r => [r.num, r.my])), times: tm };
         setResult(rows);
         onFinish && onFinish(attempt, rows);
       };
@@ -3774,8 +4224,8 @@
         if (result) return;
         const h = (e) => {
           if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-          if (e.key === 'ArrowRight') setIdx(i => Math.min(qsList.length - 1, i + 1));
-          else if (e.key === 'ArrowLeft') setIdx(i => Math.max(0, i - 1));
+          if (e.key === 'ArrowRight') goTo(Math.min(qsList.length - 1, idx + 1));
+          else if (e.key === 'ArrowLeft') goTo(Math.max(0, idx - 1));
           else { const L = EXAM_LETTERS.indexOf(e.key.toUpperCase()); if (L >= 0 && qsList[idx]) setPicked(p => ({ ...p, [qsList[idx].num]: L })); }
         };
         window.addEventListener('keydown', h);
@@ -3792,6 +4242,12 @@
         }).filter(s => s.n);
         const graded = live.filter(x => x.graded).length, ok = live.filter(x => x.ok).length;
         const fullExam = section == null && qsList.length >= 70;
+        // Süre analizi
+        const fmtSec = (s) => s >= 60 ? Math.floor(s / 60) + ' dk ' + (s % 60) + ' sn' : s + ' sn';
+        const tOf = (num) => (times || {})[num] || 0;
+        const secTime = (s) => { const qs = qsList.filter(q => qSection(q) === s.label); const tot = qs.reduce((a, q) => a + tOf(q.num), 0); return times && qs.length ? Math.round(tot / qs.length) : null; };
+        const slowest = times ? [...qsList].sort((a, b) => tOf(b.num) - tOf(a.num)).slice(0, 3).filter(q => tOf(q.num) > 0) : [];
+        const slowSec = times ? bySection.filter(s => secTime(s) != null).sort((a, b) => secTime(b) - secTime(a))[0] : null;
         const used = Math.round((Date.now() - startAt) / 1000);
         const shown = qsList.filter(q => {
           const r = live.find(x => x.num === q.num);
@@ -3816,14 +4272,14 @@
               ) : <p className="text-sm text-amber-300">Bu sınavın cevap anahtarı girilmemiş; sorular puanlanamadı. Aşağıdan doğru cevapları işaretleyebilir ya da sınav kartındaki "🔑 Anahtar" ile toplu girebilirsiniz.</p>}
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
-                  <thead><tr className="text-slate-500 text-left"><th className="py-1">Bölüm</th><th>Doğru</th><th>Yanlış</th><th>Boş</th><th>Anahtarsız</th><th className="w-24">Başarı</th></tr></thead>
+                  <thead><tr className="text-slate-500 text-left"><th className="py-1">Bölüm</th><th>Doğru</th><th>Yanlış</th><th>Boş</th><th>Anahtarsız</th><th title="Soru başına ortalama süre">Ort. süre</th><th className="w-24">Başarı</th></tr></thead>
                   <tbody>
                     {bySection.map(s => {
                       const g = s.n - s.ungraded, pct = g ? Math.round(s.ok / g * 100) : null;
                       return (
                         <tr key={s.label} className="border-t border-slate-800 text-slate-300">
                           <td className="py-1.5">{s.label} <span className="text-slate-600">({s.from}-{s.to})</span></td>
-                          <td className="text-emerald-400 font-bold">{s.ok}</td><td className="text-red-400">{s.wrong}</td><td className="text-slate-400">{s.empty}</td><td className="text-slate-500">{s.ungraded}</td>
+                          <td className="text-emerald-400 font-bold">{s.ok}</td><td className="text-red-400">{s.wrong}</td><td className="text-slate-400">{s.empty}</td><td className="text-slate-500">{s.ungraded}</td><td className="text-slate-400">{secTime(s) == null ? "—" : fmtSec(secTime(s))}</td>
                           <td>{pct == null ? '—' : <div className="flex items-center gap-1"><div className="flex-1 h-1.5 rounded bg-slate-800"><div className={"h-full rounded " + (pct >= 70 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-500' : 'bg-red-500')} style={{ width: pct + '%' }} /></div><span className="w-8 text-right">%{pct}</span></div>}</td>
                         </tr>
                       );
@@ -3831,6 +4287,9 @@
                   </tbody>
                 </table>
               </div>
+              {slowSec && slowest.length > 0 && (
+                <p className="text-[11px] text-sky-200">⏱ En çok zaman harcadığınız bölüm: <b>{slowSec.label}</b> (soru başına {fmtSec(secTime(slowSec))}). En uzun süren sorular: {slowest.map(q => q.num + '. soru ' + fmtSec(Math.round(tOf(q.num)))).join(' · ')}. Gerçek sınavda soru başına ortalama 2 dk 15 sn düşer.</p>
+              )}
               {bySection.filter(s => s.n - s.ungraded >= 3).length > 1 && (() => {
                 const weak = bySection.filter(s => s.n - s.ungraded >= 3).sort((a, b) => a.ok / (a.n - a.ungraded) - b.ok / (b.n - b.ungraded))[0];
                 return <p className="text-[11px] text-amber-200">💡 En çok zorlandığınız bölüm: <b>{weak.label}</b>. Yanlışlarınızın altındaki "Benzer soru üret" ile bu tipte alıştırma yapabilirsiniz.</p>;
@@ -3898,7 +4357,7 @@
           {/* Soru haritası */}
           <div className="flex flex-wrap gap-1">
             {qsList.map((x, i) => (
-              <button key={x.num} onClick={() => setIdx(i)} title={'Soru ' + x.num}
+              <button key={x.num} onClick={() => goTo(i)} title={'Soru ' + x.num}
                 className={"w-7 h-7 rounded text-[10px] font-bold border " + (i === idx ? 'border-blue-400 text-white bg-blue-600' : flags[x.num] ? 'border-amber-500 text-amber-300 bg-amber-950/40' : picked[x.num] !== undefined ? 'border-slate-600 bg-slate-700 text-white' : 'border-slate-800 text-slate-500 bg-slate-950')}>
                 {x.num}
               </button>
@@ -3918,10 +4377,10 @@
               ))}
             </div>
             <div className="flex items-center justify-between gap-2">
-              <button disabled={idx === 0} onClick={() => setIdx(idx - 1)} className="px-4 py-2 rounded-lg bg-slate-800 text-xs font-bold text-slate-200 disabled:opacity-30">← Önceki</button>
+              <button disabled={idx === 0} onClick={() => goTo(idx - 1)} className="px-4 py-2 rounded-lg bg-slate-800 text-xs font-bold text-slate-200 disabled:opacity-30">← Önceki</button>
               <button onClick={() => setFlags(f => ({ ...f, [q.num]: !f[q.num] }))} className={"text-xs " + (flags[q.num] ? 'text-amber-300' : 'text-slate-500 hover:text-amber-300')}>⚑ {flags[q.num] ? 'İşaretli' : 'Sonra bak'}</button>
               {idx + 1 < qsList.length
-                ? <button onClick={() => setIdx(idx + 1)} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Sonraki →</button>
+                ? <button onClick={() => goTo(idx + 1)} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Sonraki →</button>
                 : <button onClick={() => { if (answeredN === qsList.length || window.confirm((qsList.length - answeredN) + ' soru boş. Sınav bitirilsin mi?')) finish(); }} className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-bold text-white">Sınavı bitir</button>}
             </div>
           </div>
@@ -3933,7 +4392,7 @@
       );
     }
 
-    function ExamSection({ cards, readings, customExams = [], onOpenUploadExam, onDeleteExam, onUpdateExam, onExamFinished, onExtractVocabFromExam, onShareExam, onOpenLibrary, onMarkDifficult, onAnswer, prepBest, onPrepBest, preset, onPresetUsed, onCheckupDone }) {
+    function ExamSection({ cards, readings, customExams = [], onOpenUploadExam, onDeleteExam, onUpdateExam, onExamFinished, onExtractVocabFromExam, onShareExam, onOpenLibrary, onMistakeResult, onPassagesToReadings, onMarkDifficult, onAnswer, prepBest, onPrepBest, preset, onPresetUsed, onCheckupDone }) {
       const [examTab, setExamTab] = useState('generator'); // 'generator' | 'uploaded'
       const [mode, setMode] = useState('mixed');
       const [count, setCount] = useState(10);
@@ -3942,6 +4401,7 @@
       const [picked, setPicked] = useState({});          // soru index → seçilen şık
       const [marked, setMarked] = useState(false);
       const [prepOpen, setPrepOpen] = useState(false);
+      const [transOpen, setTransOpen] = useState(false);
       const [timed, setTimed] = useState(null);           // { endAt, total } süreli haftalık check-up
       const [now, setNow] = useState(Date.now());
       const reported = useRef(false);
@@ -3949,6 +4409,7 @@
       const build = (opts) => {
         const m = (opts && opts.mode) || mode, n = (opts && opts.count) || count;
         if (m === 'prep') { setPrepOpen(true); return; }
+        if (m === 'translate') { setTransOpen(true); return; }
         const per = m === 'mixed' ? Math.ceil(n / 4) + 1 : n;
         let list = [];
         if (m === 'mixed' || m === 'vocab') list = list.concat(genVocabQuestions(cards, per));
@@ -3990,6 +4451,8 @@
       // Haftalık check-up dışarıdan (İstatistikler) başlatılabilir
       useEffect(() => {
         if (preset && preset.weekly) { setPrepOpen(false); build({ mode: 'mixed', count: 20, seconds: 15 * 60 }); onPresetUsed && onPresetUsed(); }
+        if (preset && preset.mistakes) { setPrepOpen(false); const list = mistakeQuestions(customExams); if (list.length) practiceList(list); else setExamTab('uploaded'); onPresetUsed && onPresetUsed(); }
+        if (preset && preset.drill) { setPrepOpen(false); build({ mode: 'mixed', count: preset.drill }); onPresetUsed && onPresetUsed(); }
       }, [preset]);
 
       // Süre sayacı; süre bitince cevaplanmayanlar boş sayılır
@@ -4020,6 +4483,10 @@
             onPractice={practiceList}
           />
         );
+      }
+
+      if (transOpen) {
+        return <TranslationPractice readings={readings} exams={customExams} onBack={() => setTransOpen(false)} onAnswer={(t, ok) => onAnswer && onAnswer(t, ok)} />;
       }
 
       if (prepOpen) {
@@ -4068,6 +4535,16 @@
                   🌐 Paylaşılan denemeler
                 </button>
               )}
+              {(() => {
+                const dueM = mistakeQuestions(customExams).length, allM = mistakeQuestions(customExams, false).length;
+                return allM > 0 ? (
+                  <button type="button" disabled={!dueM} onClick={() => practiceList(mistakeQuestions(customExams))}
+                    title={dueM ? 'Bugün tekrar edilecek yanlışlarınız' : 'Bugün tekrar zamanı gelen yanlış yok'}
+                    className="px-3.5 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-xs font-bold text-white shadow disabled:opacity-50">
+                    📕 Yanlışlarım: {dueM} bugün · {allM} toplam
+                  </button>
+                ) : null;
+              })()}
             </div>
 
             {examTab === 'uploaded' ? (
@@ -4114,6 +4591,12 @@
                                 title="Sınavdaki hedef kelimeleri kelime bankanıza aktarır"
                               >
                                 ✨ Kelimeleri Bankaya Ekle
+                              </button>
+                            )}
+                            {onPassagesToReadings && ex.questions.some(q => q.passage) && (
+                              <button type="button" onClick={() => onPassagesToReadings(ex)} title="Okuma ve cloze parçalarını Okuma Parçalarım'a aktar"
+                                className="px-2.5 py-1.5 rounded-lg bg-amber-950/60 border border-amber-800 text-amber-200 hover:bg-amber-900 text-xs font-bold">
+                                📖 Parçaları okumaya aktar
                               </button>
                             )}
                             {onShareExam && (
@@ -4181,7 +4664,7 @@
                 <h3 className="font-bold text-lg text-white">🎓 YÖKDİL Tarzı Özgün Soru Üretici</h3>
                 <p className="text-xs text-slate-400">Sorular sizin okuma metinlerinizden ve kelime kartlarınızdan otomatik üretilir. Her soruda 5 şık vardır; cevabınızdan sonra açıklama gösterilir.</p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                  {[['mixed', 'Karışık (önerilen)'], ['vocab', 'Kelime – boşluk doldurma'], ['synonym', '🎯 Eş Anlamlılar (Synonyms)'], ['linker', 'Bağlaç / geçiş ifadeleri'], ['irrelevant', 'Anlamı bozan cümle'], ['meaning', 'Türkçe karşılık'], ['prep', '🎯 Preposition Matrix & Çark']].map(([k, label]) => (
+                  {[['mixed', 'Karışık (önerilen)'], ['vocab', 'Kelime – boşluk doldurma'], ['synonym', '🎯 Eş Anlamlılar (Synonyms)'], ['linker', 'Bağlaç / geçiş ifadeleri'], ['irrelevant', 'Anlamı bozan cümle'], ['meaning', 'Türkçe karşılık'], ['translate', '✍️ Çeviri alıştırması (Claude)'], ['prep', '🎯 Preposition Matrix & Çark']].map(([k, label]) => (
                     <label key={k} className={"flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer " + (mode === k ? 'border-blue-600 bg-blue-600/10 text-white' : 'border-slate-800 text-slate-300')}>
                       <input type="radio" name="examMode" checked={mode === k} onChange={() => setMode(k)} className="accent-blue-500" /> {label}
                     </label>
@@ -4193,8 +4676,8 @@
                     <button key={n} onClick={() => setCount(n)} className={"px-3 py-1.5 rounded-lg font-bold " + (count === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{n}</button>
                   ))}
                 </div>
-                {needs.length > 0 && mode !== 'prep' && <p className="text-[11px] text-amber-400">Daha çok soru için: {needs.join(', ')}. Bağlaç ve anlamı bozan cümle soruları okuma metinlerinden üretilir (ikincisi için en az 2 metin gerekir).</p>}
-                <button onClick={() => build()} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">{mode === 'prep' ? 'Oyunu Aç' : 'Sınavı Başlat'}</button>
+                {needs.length > 0 && mode !== 'prep' && mode !== 'translate' && <p className="text-[11px] text-amber-400">Daha çok soru için: {needs.join(', ')}. Bağlaç ve anlamı bozan cümle soruları okuma metinlerinden üretilir (ikincisi için en az 2 metin gerekir).</p>}
+                <button onClick={() => build()} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">{mode === 'prep' ? 'Oyunu Aç' : mode === 'translate' ? 'Alıştırmayı Aç' : 'Sınavı Başlat'}</button>
                 <button onClick={() => build({ mode: 'mixed', count: 20, seconds: 15 * 60 })} className="w-full py-2.5 rounded-xl bg-indigo-700 text-white font-bold text-xs hover:bg-indigo-600">
                   ⏱ Haftalık Check-up: 20 soru · 15 dakika{new Date().getDay() === 0 ? ' — bugün check-up günü!' : ''}
                 </button>
@@ -4287,6 +4770,7 @@
                   <button key={i} disabled={isAnswered || (timed && my !== undefined)} onClick={() => {
                     setPicked({ ...picked, [idx]: i });
                     if (onAnswer) onAnswer(q.type, i === q.answer);
+                    if (q.mistakeRef && onMistakeResult) onMistakeResult(q.mistakeRef, i === q.answer);
                     if (timed) setTimeout(() => setIdx(x => x + 1), 250);     // süreli denemede doğrudan sonraki soru
                   }}
                           className={"w-full text-left px-4 py-2.5 rounded-xl border text-sm transition " + cls}>

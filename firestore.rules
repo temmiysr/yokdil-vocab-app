@@ -22,5 +22,23 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/public_shares/$(shareId)).data.ownerUid == request.auth.uid;
       }
     }
+
+    // Çalışma grupları: kodu bilen, giriş yapmış kişi grubu ve haftalık sıralamayı görür;
+    // herkes yalnızca kendi satırını (takma ad + haftalık sayılar) yazıp silebilir
+    match /groups/{code} {
+      allow get: if request.auth != null;
+      allow create: if request.auth != null
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.name is string && request.resource.data.name.size() <= 60;
+      allow update, delete: if request.auth != null && resource.data.createdBy == request.auth.uid;
+
+      match /members/{uid} {
+        allow read: if request.auth != null;
+        allow create, update: if request.auth != null && request.auth.uid == uid
+          && exists(/databases/$(database)/documents/groups/$(code))
+          && request.resource.data.nick is string && request.resource.data.nick.size() <= 24;
+        allow delete: if request.auth != null && request.auth.uid == uid;
+      }
+    }
   }
 }

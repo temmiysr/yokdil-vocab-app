@@ -1,8 +1,9 @@
 name: Deploy to GitHub Pages
 
-# Uygulamanın güncel ve çalışan sürümü dist/ klasöründedir (tek dosyalık dist/index.html:
-# PDF/Word/OCR okuma, çoklu dosya, otomatik kelime çıkarma, Kelime Kartları vb.).
-# Bu yüzden derleme YAPILMAZ; dist/ olduğu gibi yayınlanır. (src/ eski Vite kaynak kodudur.)
+# Uygulamanın güncel sürümü dist/ klasöründedir (tek dosyalık dist/index.html).
+# Yayından önce: ayrıştırıcı testleri çalışır (tests/parser.test.mjs), sonra scripts/build.mjs JSX kodunu
+# önceden derleyip _site/ klasörüne yazar (tarayıcı Babel indirmez, site hızlı açılır). Yayınlanan: _site/.
+# (src/ eski Vite kaynak kodudur.)
 #
 # Not: Ücretsiz GitHub hesabında GİZLİ (private) depodan Pages yayınlanamaz.
 # Depo gizliyken bu iş push'ta kendiliğinden çalışmaz (hata e-postası gelmez).
@@ -37,10 +38,24 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload dist as Pages artifact
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Babel (build only)
+        run: npm install --no-save --prefix /tmp/babel @babel/standalone@7.26.4
+
+      - name: Run parser tests
+        run: node tests/parser.test.mjs
+
+      - name: Build (precompile JSX)
+        run: BABEL_PATH=/tmp/babel/node_modules/@babel/standalone node scripts/build.mjs
+
+      - name: Upload site as Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: ./_site
 
       - name: Deploy to GitHub Pages
         id: deployment
