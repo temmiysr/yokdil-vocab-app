@@ -93,6 +93,7 @@
       READINGS: 'yokdil_readings_v1',
       VOCAB: 'yokdil_vocab_cards_v1',
       SETTINGS: 'yokdil_user_settings_v1',
+      EXAMS: 'custom_exams',               // yüklenen çıkmış sınav / denemeler (Antigravity eklentisi)
       ACTIVITY: 'yokdil_activity_v1',      // günlük çalışma kaydı: [{ id: 'YYYY-MM-DD', reviews, correct, again, newCards, examQ, examCorrect, examByType }]
     };
 
@@ -151,7 +152,7 @@
     const isQuotaError = (e) => !!e && (e.name === 'QuotaExceededError' || e.code === 22 || /quota/i.test(e.message || ''));
 
     // Açılışta tüm veriyi yükler (gerekirse localStorage → IndexedDB taşıması yapar)
-    const DATA_KEYS = [STORAGE_KEYS.WEEKS, STORAGE_KEYS.READINGS, STORAGE_KEYS.VOCAB, STORAGE_KEYS.SETTINGS, STORAGE_KEYS.ACTIVITY];
+    const DATA_KEYS = [STORAGE_KEYS.WEEKS, STORAGE_KEYS.READINGS, STORAGE_KEYS.VOCAB, STORAGE_KEYS.SETTINGS, STORAGE_KEYS.ACTIVITY, STORAGE_KEYS.EXAMS];
     async function loadAllData() {
       const fromLocal = () => Object.fromEntries(DATA_KEYS.map(k => [k, getStored(k, undefined)]));
       try {
@@ -377,20 +378,15 @@
     }
 
     // Bionic Reading Kelime Biçimlendirici (Akademik Odaklanma)
-    function formatBionicWord(word, key) {
-      const m = word.match(/^([^A-Za-z]*)([A-Za-z]+)([^A-Za-z]*)$/);
-      if (!m) return word + ' ';
-      const lead = m[1], letters = m[2], trail = m[3];
+    // Yalnızca harflerden oluşan bir kelime alır (boşluk/noktalama dışarıda kalır, ek boşluk eklenmez).
+    // data-w: tıkla-anlam özelliği kelime parçalara bölünse de kelimenin tamamını bulabilsin diye.
+    function formatBionicWord(letters, key, extraCls) {
       const len = letters.length;
       const fix = len <= 3 ? 1 : len <= 5 ? 2 : len <= 7 ? 3 : Math.ceil(len * 0.45);
-      const boldPart = letters.slice(0, fix);
-      const restPart = letters.slice(fix);
       return (
-        <span key={key}>
-          {lead}
-          <strong className="font-extrabold text-white">{boldPart}</strong>
-          <span className="opacity-80">{restPart}</span>
-          {trail}{' '}
+        <span key={key} data-w={letters} className={extraCls || undefined}>
+          <strong className="font-extrabold text-white">{letters.slice(0, fix)}</strong>
+          <span className="opacity-80">{letters.slice(fix)}</span>
         </span>
       );
     }
@@ -553,6 +549,42 @@
       if (/ed$/.test(w)) { const s = w.slice(0, -2); c.push(s, s + 'e'); if (/([b-df-hj-np-tv-z])\1$/.test(s)) c.push(s.slice(0, -1)); }
       if (/ing$/.test(w)) { const s = w.slice(0, -3); c.push(s, s + 'e'); if (/([b-df-hj-np-tv-z])\1$/.test(s)) c.push(s.slice(0, -1)); }
       return [...new Set(c)].filter(x => x.length >= 3);
+    };
+
+    // Türetme eki kök adayları (substantially → substantial, advancement → advance, awareness → aware…).
+    // Türetilmiş kelime çoğu zaman ayrı bir kelimedir (government ≠ govern); bu yüzden kök otomatik seçilmez, ÖNERİ olarak sunulur.
+    const derivationalCandidates = (w) => {
+      const c = [];
+      const add = (x) => { if (x && x.length >= 3 && x !== w) c.push(x); };
+      if (/ally$/.test(w)) { add(w.slice(0, -2)); add(w.slice(0, -4)); }               // economically → economical, economic
+      else if (/ily$/.test(w)) add(w.slice(0, -3) + 'y');                               // happily → happy
+      else if (/bly$/.test(w)) add(w.slice(0, -1) + 'e');                               // probably → probable
+      else if (/ly$/.test(w)) add(w.slice(0, -2));                                      // substantially → substantial
+      if (/ments?$/.test(w)) add(w.replace(/ments?$/, ''));                             // advancement(s) → advance
+      if (/iness$/.test(w)) add(w.slice(0, -5) + 'y');                                  // happiness → happy
+      else if (/ness$/.test(w)) add(w.slice(0, -4));                                    // awareness → aware
+      if (/ations?$/.test(w)) { const s = w.replace(/s$/, ''); add(s.slice(0, -3) + 'e'); add(s.slice(0, -5)); add(s.slice(0, -5) + 'e'); }   // creation → create, information → inform, realization → realize
+      else if (/tions?$/.test(w)) { const s = w.replace(/s$/, ''); add(s.slice(0, -3)); add(s.slice(0, -4) + 'e'); }                         // adoption → adopt, reduction → reduce
+      if (/ility$/.test(w)) add(w.slice(0, -5) + 'le');                                 // stability → stable
+      else if (/ity$/.test(w)) { add(w.slice(0, -3)); add(w.slice(0, -3) + 'e'); }      // validity → valid, scarcity → scarce
+      if (/ive$/.test(w)) { add(w.slice(0, -3)); add(w.slice(0, -3) + 'e'); }           // effective → effect, creative → create
+      if (/logical$/.test(w)) add(w.slice(0, -4) + 'y');                                // technological → technology
+      if (/[^i]al$/.test(w) && !/ally$/.test(w)) add(w.slice(0, -2));                   // environmental → environment
+      return [...new Set(c)];
+    };
+    // Sözlükte gerçekten var olan kök önerileri (en fazla 2)
+    const findDerivationalRoots = async (word) => {
+      const raw = String(word || '').toLowerCase().trim();
+      if (!/^[a-z]{5,}$/.test(raw)) return [];
+      const bases = [...new Set([raw, ...lemmaCandidates(raw).slice(1)])];         // önce çekim ekini at (advancements → advancement)
+      const cands = [...new Set(bases.flatMap(derivationalCandidates))].filter(x => !bases.includes(x)).slice(0, 8);
+      const out = [];
+      for (const x of cands) {
+        const info = await lookupFreq(x).catch(() => null);
+        if (info && info.f >= 0.3 && !info.tags.includes('prop')) out.push(x);
+        if (out.length >= 2) break;
+      }
+      return out;
     };
 
     // Kelimeyi köküne indir: kök adayı yeterince yaygınsa (orijinalin ≥%30'u) onu seç
@@ -833,7 +865,7 @@
       appId: '1:294443630442:web:7ef2849a41c5d6e4b72f13',
     };
     // Eşitlenen veri türleri (Ayarlar bilerek dahil değil: Telegram token'ı gibi gizli bilgiler buluta gitmez)
-    const SYNC_KINDS = ['weeks', 'readings', 'cards', 'activity'];
+    const SYNC_KINDS = ['weeks', 'readings', 'cards', 'activity', 'exams'];
     const SYNC_TS_KEY = 'yokdil_sync_ts_v1';            // { kind: { id: son yerel değişiklik zamanı } }
     // Firestore'da bir belge en fazla 1 MB olabilir; daha büyük öğe toplu gönderimi tümden bozar → atlanır (cihazda kalır)
     const SYNC_MAX_BYTES = 900000;
@@ -854,17 +886,17 @@
 
     // Firestore'da her öğe tek belge: users/{uid}/{kind}/{id} = { json, ts, deleted }
     // (json olarak saklanır: undefined/iç içe alanlar sorun çıkarmaz; silinenler "deleted" işaretiyle tutulur ki diğer cihazlar da silsin)
-    function useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity }) {
+    function useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity, exams, setExams }) {
       const [user, setUser] = useState(null);
       const [authReady, setAuthReady] = useState(false);
       const [status, setStatus] = useState('off');      // off | syncing | synced | error
       const [error, setError] = useState('');
       const [lastSync, setLastSync] = useState(null);
       const [tooBig, setTooBig] = useState([]);          // buluta sığmadığı için yalnızca bu cihazda kalan öğeler
-      const data = { weeks, readings, cards, activity };
-      const setters = { weeks: setWeeks, readings: setReadings, cards: setCards, activity: setActivity };
+      const data = { weeks, readings, cards, activity, exams: exams || [] };
+      const setters = { weeks: setWeeks, readings: setReadings, cards: setCards, activity: setActivity, exams: setExams };
       const dataRef = useRef(data); dataRef.current = data;
-      const synced = useRef({ weeks: new Map(), readings: new Map(), cards: new Map(), activity: new Map() });   // buluttaki bilinen hâl (id → json)
+      const synced = useRef({ weeks: new Map(), readings: new Map(), cards: new Map(), activity: new Map(), exams: new Map() });   // buluttaki bilinen hâl (id → json)
       const ready = useRef(false);
       const seen = useRef(null);                         // değişiklik zamanı damgası için önceki yerel hâl
 
@@ -873,7 +905,7 @@
 
       // Yerel değişikliklere zaman damgası (giriş yapılmamışken de): ilk girişte hangi sürümün yeni olduğunu bilmek için
       useEffect(() => {
-        const cur = { weeks: toMap(weeks), readings: toMap(readings), cards: toMap(cards), activity: toMap(activity) };
+        const cur = { weeks: toMap(weeks), readings: toMap(readings), cards: toMap(cards), activity: toMap(activity), exams: toMap(exams) };
         if (seen.current) {
           const all = tsAll(); const now = Date.now(); let changed = false;
           SYNC_KINDS.forEach(k => {
@@ -883,7 +915,7 @@
           if (changed) { try { localStorage.setItem(SYNC_TS_KEY, JSON.stringify(all)); } catch (e) {} }
         }
         seen.current = cur;
-      }, [weeks, readings, cards, activity]);
+      }, [weeks, readings, cards, activity, exams]);
 
       // Oturum durumu
       useEffect(() => {
@@ -1011,7 +1043,7 @@
           }
         }, 1200);
         return () => clearTimeout(t);
-      }, [weeks, readings, cards, activity, user]);
+      }, [weeks, readings, cards, activity, exams, user]);
 
       const signIn = async () => {
         const fb = getFirebase();
@@ -1095,8 +1127,10 @@
       const [cards, setCards] = useState(() => initial[STORAGE_KEYS.VOCAB] || []);
       const [storageWarning, setStorageWarning] = useState('');
       const [activity, setActivity] = useState(() => initial[STORAGE_KEYS.ACTIVITY] || []);
-      // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler, kartlar ve çalışma kaydı tüm cihazlarda aynı olur)
-      const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity });
+      // Yüklenen çıkmış sınav / denemeler (IndexedDB'de; eski sürümde localStorage'daydı, loadAllData taşır)
+      const [customExams, setCustomExams] = useState(() => initial[STORAGE_KEYS.EXAMS] || []);
+      // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler, kartlar, çalışma kaydı ve denemeler tüm cihazlarda aynı olur)
+      const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards, activity, setActivity, exams: customExams, setExams: setCustomExams });
 
       // Günlük çalışma kaydına ekle: logActivity({ reviews: 1, correct: 1 })
       const logActivity = (patch, byType) => {
@@ -1118,7 +1152,7 @@
 
       // --- Yedek indir / yükle ---
       const exportBackup = () => {
-        const payload = { app: 'yokdil-master', version: 1, exportedAt: new Date().toISOString(), weeks, readings, cards };
+        const payload = { app: 'yokdil-master', version: 2, exportedAt: new Date().toISOString(), weeks, readings, cards, activity, exams: customExams };
         const blob = new Blob([JSON.stringify(payload, null, 1)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -1126,7 +1160,7 @@
         a.download = 'yokdil-yedek-' + new Date().toISOString().slice(0, 10) + '.json';
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 2000);
-        showToast('Yedek indirildi: ' + weeks.length + ' hafta, ' + readings.length + ' metin, ' + cards.length + ' kart.');
+        showToast('Yedek indirildi: ' + weeks.length + ' hafta, ' + readings.length + ' metin, ' + cards.length + ' kart, ' + customExams.length + ' deneme.');
       };
 
       // Yedekteki öğeler mevcutlarla birleştirilir (hiçbir şey silinmez); aynı öğe varsa daha yeni olan kalır
@@ -1149,7 +1183,8 @@
             return { list: [...newOnes, ...rest], added, updated, incIds };
           };
           const w = mergeList(weeks, data.weeks), r = mergeList(readings, data.readings), c = mergeList(cards, data.cards);
-          setWeeks(w.list); setReadings(r.list); setCards(c.list);
+          const ex = mergeList(customExams, data.exams), ac = mergeList(activity, data.activity);
+          setWeeks(w.list); setReadings(r.list); setCards(c.list); setCustomExams(ex.list); setActivity(ac.list);
           showToast('Yedek yüklendi: ' + w.added + ' hafta, ' + r.added + ' metin, ' + c.added + ' kart eklendi' + ((w.updated + r.updated + c.updated) ? ', ' + (w.updated + r.updated + c.updated) + ' öğe güncellendi' : '') + (sync.user ? '. Buluta eşitleniyor…' : '.'));
         } catch (e) {
           showToast('Yedek yüklenemedi: ' + (e instanceof SyntaxError ? 'dosya geçerli bir yedek değil.' : (e && e.message ? e.message : 'dosya okunamadı')), true);
@@ -1185,16 +1220,13 @@
       const [isNewWeekOpen, setIsNewWeekOpen] = useState(false);
       const [isUploadReadingOpen, setIsUploadReadingOpen] = useState(false);
       const [isUploadExamOpen, setIsUploadExamOpen] = useState(false);
-      const [customExams, setCustomExams] = useState(() => getStored('custom_exams', []));
       const [autoVocabReadingId, setAutoVocabReadingId] = useState(null);
       const [recentCardIds, setRecentCardIds] = useState([]);
       const [toast, setToast] = useState('');
       const showToast = (msg, isError) => { setToast((isError ? '⚠ ' : '') + msg); setTimeout(() => setToast(''), 6000); };
       const [duplicateCard, setDuplicateCard] = useState(null);
 
-      useEffect(() => {
-        setStored('custom_exams', customExams);
-      }, [customExams]);
+      useEffect(() => { persist(STORAGE_KEYS.EXAMS, customExams); }, [customExams]);
 
       const handleExtractVocabFromExam = (exam) => {
         const vocabQs = exam.questions.filter(q => q.num <= 6 || q.category.includes('Kelime'));
@@ -1270,6 +1302,19 @@
           if (p) { node = p.offsetNode; offset = p.offset; }
         }
         if (!node || node.nodeType !== 3) { setWordPop(null); return; }
+        // Biyonik okumada kelime parçalara bölünür: kelimenin tamamı data-w özelliğinde
+        const wrap = node.parentElement && node.parentElement.closest('[data-w]');
+        if (wrap) {
+          const r = wrap.getBoundingClientRect();
+          setPopoverPos(null);
+          setWordPop({
+            word: wrap.dataset.w,
+            sentence: extractSentence(reading.content.replace(/^##\s+/gm, ''), wrap.dataset.w),
+            x: r.left + r.width / 2, y: r.bottom, top: r.top,
+            readingId: reading.id,
+          });
+          return;
+        }
         const text = node.textContent;
         const isW = (ch) => /[A-Za-z'’-]/.test(ch || '');
         let s = offset, en = offset;
@@ -1796,20 +1841,20 @@
                             // AWL vurgusu (çok uzun metinlerde performans için kapalı)
                             const hl = awlHighlight && current.content.length < 120000;
                             const bank = hl ? new Set(cards.map(c => String(c.lemma || c.english).toLowerCase())) : null;
+                            // Biyonik okuma ve AWL vurgusu birlikte çalışır (kelime kelime işlenir, boşluklar aynen korunur)
+                            const bionic = bionicReading && current.content.length < 120000;
                             const renderLine = (line) => {
-                              if (bionicReading) {
-                                return line.split(/(\s+)/).map((tok, k) => {
-                                  if (/^\s+$/.test(tok)) return tok;
-                                  return formatBionicWord(tok, k);
-                                });
-                              }
-                              if (!hl) return line;
+                              if (!bionic && !hl) return line;
                               return line.split(/([A-Za-z]+)/).map((tok, k) => {
                                 if (k % 2 === 0) return tok;
                                 const w = tok.toLowerCase();
-                                if (w.length < 3 || STOPWORDS.has(w) || !awlSublist(w)) return tok;
-                                const own = bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
-                                return <span key={k} className={"underline decoration-2 underline-offset-4 " + (own ? 'decoration-emerald-500/70' : 'decoration-purple-400')}>{tok}</span>;
+                                let awlCls = '';
+                                if (hl && w.length >= 3 && !STOPWORDS.has(w) && awlSublist(w)) {
+                                  const own = bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
+                                  awlCls = "underline decoration-2 underline-offset-4 " + (own ? 'decoration-emerald-500/70' : 'decoration-purple-400');
+                                }
+                                if (bionic) return formatBionicWord(tok, k, awlCls);
+                                return awlCls ? <span key={k} className={awlCls}>{tok}</span> : tok;
                               });
                             };
                             return current.content.split('\n').map((line, i) => (
@@ -1864,7 +1909,8 @@
 
               {/* İSTATİSTİKLER */}
               {activeTab === 'stats' && (
-                <StatsSection cards={cards} activity={activity} settings={settings} setSettings={setSettings} />
+                <StatsSection cards={cards} activity={activity} settings={settings} setSettings={setSettings}
+                              onWeeklyCheckup={() => { setExamPreset({ weekly: true, at: Date.now() }); goTab('study'); }} />
               )}
 
               {/* ZORLANDIĞIM KELİMELER */}
@@ -2237,13 +2283,13 @@
           // Kart kapalıyken hafifçe yukarı kaydırılırsa veya dokunulursa aç
           if (dragY < -40 || Math.abs(dragX) > 40) setRevealed(true);
         } else {
-          // Anlam açıkken: Sağa = İyi (3), Sola = Tekrar (1), Yukarı = Zor (2)
+          // Anlam açıkken: Sağa = İyi (3), Sola = Tekrar (1), Yukarı = Kolay (4)
           if (dragX > 70) {
             handleRating(3);
           } else if (dragX < -70) {
             handleRating(1);
           } else if (dragY < -60 && Math.abs(dragY) > Math.abs(dragX)) {
-            handleRating(2);
+            handleRating(4);
           }
         }
         setDragX(0);
@@ -2254,8 +2300,8 @@
       if (!card) return null;
       const preview = [1, 2, 3, 4].map(g => fsrsNext(card.srs, g).interval);
       const isUp = dragY < -40 && Math.abs(dragY) > Math.abs(dragX);
-      const swipeHint = dragX > 40 ? 'İyi →' : dragX < -40 ? '← Tekrar' : isUp ? '↑ Zor' : '';
-      const borderCls = dragX > 40 ? 'border-emerald-500 shadow-emerald-950/50' : dragX < -40 ? 'border-red-500 shadow-red-950/50' : isUp ? 'border-amber-500 shadow-amber-950/50' : 'border-slate-800';
+      const swipeHint = dragX > 40 ? 'İyi →' : dragX < -40 ? '← Tekrar' : isUp ? '↑ Kolay' : '';
+      const borderCls = dragX > 40 ? 'border-emerald-500 shadow-emerald-950/50' : dragX < -40 ? 'border-red-500 shadow-red-950/50' : isUp ? 'border-sky-400 shadow-sky-950/50' : 'border-slate-800';
 
       return (
         <div
@@ -2270,7 +2316,7 @@
             {goal > 0 && <span className={doneToday >= goal ? 'text-emerald-400' : ''}>🎯 Bugün {doneToday}/{goal}</span>}
           </div>
           {swipeHint && (
-            <div className={"text-base font-black animate-pulse " + (dragX > 0 ? 'text-emerald-400' : dragX < 0 ? 'text-red-400' : 'text-amber-400')}>
+            <div className={"text-base font-black animate-pulse " + (dragX > 0 ? 'text-emerald-400' : dragX < 0 ? 'text-red-400' : 'text-sky-300')}>
               {swipeHint}
             </div>
           )}
@@ -2310,7 +2356,7 @@
                 ))}
               </div>
               <p className="text-[10px] text-slate-400 mt-2">
-                📱 Telefonda: <b>Sağa</b> = İyi, <b>Sola</b> = Tekrar, <b>Yukarı</b> = Zor · ⌨ Klavye: 1-4
+                📱 Telefonda: <b>Sağa</b> = İyi, <b>Sola</b> = Tekrar, <b>Yukarı</b> = Kolay · ⌨ Klavye: 1-4
               </p>
             </div>
           ) : (
@@ -2386,7 +2432,7 @@
       );
     }
 
-    function StatsSection({ cards, activity, settings, setSettings }) {
+    function StatsSection({ cards, activity, settings, setSettings, onWeeklyCheckup }) {
       const today = getTodayStr();
       const todayRec = activity.find(a => a.id === today) || {};
       const goal = settings.dailyGoal || 20;
@@ -2458,6 +2504,21 @@
             <StatBox label="Çözülen soru" value={activity.reduce((s, a) => s + (a.examQ || 0), 0)} sub={(() => { const q = activity.reduce((s, a) => s + (a.examQ || 0), 0), c = activity.reduce((s, a) => s + (a.examCorrect || 0), 0); return q ? '%' + Math.round(c / q * 100) + ' doğru' : 'Sınavlar sekmesinden'; })()} cls="text-purple-400" />
           </div>
 
+          {/* Haftalık check-up */}
+          {(() => {
+            const last = activity.find(a => (a.checkups || 0) > 0);
+            const isSunday = new Date().getDay() === 0;
+            return (
+              <div className={"p-4 rounded-2xl border flex flex-wrap items-center gap-3 " + (isSunday ? 'bg-indigo-950/50 border-indigo-600' : 'bg-slate-950 border-slate-800')}>
+                <div className="mr-auto">
+                  <p className="text-sm font-bold text-white">⏱ Haftalık Check-up {isSunday && <span className="text-indigo-300">— bugün check-up günü!</span>}</p>
+                  <p className="text-[11px] text-slate-400">Şimdiye kadar çalıştığınız tüm kelime ve metinlerden 20 soru · 15 dakika · sonuç ve açıklamalar sonda.</p>
+                  {last && <p className="text-[11px] text-indigo-300 mt-0.5">Son check-up ({new Date(last.id + 'T00:00:00').toLocaleDateString('tr-TR', { day: 'numeric', month: 'long' })}): {last.checkupCorrect}/{last.checkupTotal} · %{Math.round(last.checkupCorrect / Math.max(1, last.checkupTotal) * 100)}</p>}
+                </div>
+                {onWeeklyCheckup && <button onClick={onWeeklyCheckup} className="px-4 py-2 rounded-lg bg-indigo-600 text-xs font-bold text-white hover:bg-indigo-500">Başlat</button>}
+              </div>
+            );
+          })()}
           {/* Son 30 gün */}
           <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
             <div className="flex items-center justify-between mb-3">
@@ -3535,13 +3596,18 @@
       const [info, setInfo] = useState(null);
       const [state, setState] = useState('loading');      // loading | ok | error
       const boxRef = useRef(null);
+      // Kök önerisine tıklanınca kutu o kelimeye geçer (pop.word yerine)
+      const [word, setWord] = useState(pop.word);
+      const [roots, setRoots] = useState([]);
+      useEffect(() => { setWord(pop.word); }, [pop.word]);
 
       useEffect(() => {
         let alive = true;
-        setState('loading'); setInfo(null);
+        setState('loading'); setInfo(null); setRoots([]);
+        findDerivationalRoots(word).then(rs => { if (alive) setRoots(rs); }).catch(() => {});
         (async () => {
           try {
-            const raw = pop.word.toLowerCase();
+            const raw = word.toLowerCase();
             const r = await resolveLemma(raw).catch(() => null);
             let lemma = r ? r.word : raw;
             let pos = r ? posFor(lemma, [raw], r.info.tags) : null;
@@ -3558,7 +3624,7 @@
           } catch (e) { if (alive) setState('error'); }
         })();
         return () => { alive = false; };
-      }, [pop.word]);
+      }, [word]);
 
       // Esc veya dışarı tıklayınca kapan
       useEffect(() => {
@@ -3575,7 +3641,7 @@
         };
       }, []);
 
-      const lemma = info ? info.lemma : pop.word.toLowerCase();
+      const lemma = info ? info.lemma : word.toLowerCase();
       const existing = cards.find(c => String(c.lemma || c.english).toLowerCase() === lemma);
       const W = 320;
       const left = Math.max(8, Math.min(window.innerWidth - W - 8, pop.x - W / 2));
@@ -3589,7 +3655,7 @@
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-baseline gap-2">
                 <span className="text-lg font-black text-white">{lemma}</span>
-                {info && info.lemma !== pop.word.toLowerCase() && <span className="text-[10px] text-slate-500">({pop.word})</span>}
+                {info && info.lemma !== word.toLowerCase() && <span className="text-[10px] text-slate-500">({word})</span>}
                 {info && info.pos && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{info.pos}</span>}
                 <AwlBadge word={lemma} />
               </div>
@@ -3606,6 +3672,9 @@
 
           {state === 'loading' && <p className="text-xs text-slate-500">Anlam aranıyor…</p>}
           {state === 'error' && <p className="text-xs text-red-400">Bağlantı hatası; anlam getirilemedi.</p>}
+          {roots.length > 0 && (
+            <p className="text-[11px] text-purple-300">🌱 Kök önerisi:{roots.map(r => <button key={r} onClick={() => setWord(r)} className="ml-1.5 px-1.5 py-0.5 rounded bg-purple-950 border border-purple-800 text-purple-200 hover:bg-purple-900 font-bold">{r}</button>)}</p>
+          )}
           {state === 'ok' && (
             <>
               <p className={"text-sm font-bold " + (info.turkish ? 'text-blue-300' : 'text-amber-400')}>
@@ -4124,11 +4193,14 @@
       const posTouched = useRef(false);
       const reqId = useRef(0);
 
+      const [roots, setRoots] = useState([]);              // türetme eki kök önerileri (substantially → substantial)
       const runLookup = async (text, wantPos) => {
         const my = ++reqId.current;
         const raw = text.trim().toLowerCase();
+        setRoots([]);
         if (raw.length < 2) { setLookup('idle'); setInfo(null); return; }
         setLookup('loading');
+        findDerivationalRoots(raw).then(rs => { if (my === reqId.current) setRoots(rs); }).catch(() => {});
         try {
           let lemma = raw, guessPos = wantPos;
           if (/^[a-z][a-z'’-]*$/.test(raw)) {
@@ -4229,6 +4301,16 @@
               <p role="status" className={"text-[10px] " + ({ loading: 'text-blue-300', found: 'text-emerald-400', notfound: 'text-amber-400', error: 'text-red-400' }[lookup] || 'text-slate-500')}>
                 {lookup === 'loading' && 'Anlam, okunuş ve örnekler aranıyor…'}
                 {lookup === 'found' && '✓ Anlam otomatik bulundu' + (info && info.trSource ? ' (' + info.trSource + ')' : '') + (info && info.lemma && info.lemma !== english.trim().toLowerCase() ? ' · kök: ' + info.lemma : '')}
+                {roots.length > 0 && (
+                  <span className="block mt-1 text-purple-300">
+                    🌱 Türetilmiş kelime. Kök önerisi:{' '}
+                    {roots.map(r => (
+                      <button key={r} type="button" onClick={() => { turkishTouched.current = false; setSynonymsInput(''); setAntonymsInput(''); setEnglish(r); }}
+                              className="ml-1 px-1.5 py-0.5 rounded bg-purple-950 border border-purple-800 text-purple-200 hover:bg-purple-900 font-bold">{r}</button>
+                    ))}
+                    <span className="text-slate-500"> (tıklayınca kök kelime eklenir)</span>
+                  </span>
+                )}
                 {lookup === 'notfound' && 'Otomatik anlam bulunamadı; yine de kaydedebilirsiniz (Kelime Kartları\'nda tekrar denenebilir).'}
                 {lookup === 'error' && 'Bağlantı hatası; internetinizi kontrol edin.'}
                 {lookup === 'idle' && 'Kelimeyi yazın, anlamı kendiliğinden gelecek.'}
