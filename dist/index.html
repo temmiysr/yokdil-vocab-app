@@ -42,6 +42,10 @@
   <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
   <!-- Resimdeki yazıları okuma (OCR) -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+  <!-- Bulut senkronizasyonu (Firebase Authentication + Firestore) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
   <script>
     if (window.pdfjsLib) {
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -547,12 +551,254 @@
       } else speakText(card.english);
     };
 
+    // --- BULUT SENKRONİZASYONU (Firebase) ---
+    // Web yapılandırması gizli değildir (her Firebase web uygulamasında herkese açıktır).
+    // Erişimi Firestore güvenlik kuralları korur: her kullanıcı yalnızca users/{kendi uid}/... altını okuyup yazabilir.
+    const FIREBASE_CONFIG = {
+      apiKey: 'AIzaSyCKJsQfCTh2wtOZ5t0HcOMHf4fC1ua0VDs',
+      authDomain: 'yokdil-master.firebaseapp.com',
+      projectId: 'yokdil-master',
+      storageBucket: 'yokdil-master.firebasestorage.app',
+      messagingSenderId: '294443630442',
+      appId: '1:294443630442:web:7ef2849a41c5d6e4b72f13',
+    };
+    // Eşitlenen veri türleri (Ayarlar bilerek dahil değil: Telegram token'ı gibi gizli bilgiler buluta gitmez)
+    const SYNC_KINDS = ['weeks', 'readings', 'cards'];
+    const SYNC_TS_KEY = 'yokdil_sync_ts_v1';            // { kind: { id: son yerel değişiklik zamanı } }
+
+    let fbCache = null;
+    const getFirebase = () => {
+      if (!window.firebase) return null;
+      if (!fbCache) {
+        try {
+          if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
+          const db = firebase.firestore();
+          try { db.enablePersistence({ synchronizeTabs: true }).catch(() => {}); } catch (e) {}   // çevrimdışı çalışma
+          fbCache = { auth: firebase.auth(), db };
+        } catch (e) { console.warn('Firebase başlatılamadı', e); return null; }
+      }
+      return fbCache;
+    };
+
+    // Firestore'da her öğe tek belge: users/{uid}/{kind}/{id} = { json, ts, deleted }
+    // (json olarak saklanır: undefined/iç içe alanlar sorun çıkarmaz; silinenler "deleted" işaretiyle tutulur ki diğer cihazlar da silsin)
+    function useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards }) {
+      const [user, setUser] = useState(null);
+      const [authReady, setAuthReady] = useState(false);
+      const [status, setStatus] = useState('off');      // off | syncing | synced | error
+      const [error, setError] = useState('');
+      const [lastSync, setLastSync] = useState(null);
+      const data = { weeks, readings, cards };
+      const setters = { weeks: setWeeks, readings: setReadings, cards: setCards };
+      const dataRef = useRef(data); dataRef.current = data;
+      const synced = useRef({ weeks: new Map(), readings: new Map(), cards: new Map() });   // buluttaki bilinen hâl (id → json)
+      const ready = useRef(false);
+      const seen = useRef(null);                         // değişiklik zamanı damgası için önceki yerel hâl
+
+      const toMap = (list) => new Map((list || []).filter(x => x && x.id != null).map(x => [String(x.id), JSON.stringify(x)]));
+      const tsAll = () => { try { return JSON.parse(localStorage.getItem(SYNC_TS_KEY) || '{}'); } catch (e) { return {}; } };
+
+      // Yerel değişikliklere zaman damgası (giriş yapılmamışken de): ilk girişte hangi sürümün yeni olduğunu bilmek için
+      useEffect(() => {
+        const cur = { weeks: toMap(weeks), readings: toMap(readings), cards: toMap(cards) };
+        if (seen.current) {
+          const all = tsAll(); const now = Date.now(); let changed = false;
+          SYNC_KINDS.forEach(k => {
+            all[k] = all[k] || {};
+            cur[k].forEach((j, id) => { if (seen.current[k].get(id) !== j) { all[k][id] = now; changed = true; } });
+          });
+          if (changed) { try { localStorage.setItem(SYNC_TS_KEY, JSON.stringify(all)); } catch (e) {} }
+        }
+        seen.current = cur;
+      }, [weeks, readings, cards]);
+
+      // Oturum durumu
+      useEffect(() => {
+        const fb = getFirebase();
+        if (!fb) { setAuthReady(true); return; }
+        fb.auth.getRedirectResult().catch(e => setError(authErrorText(e)));
+        return fb.auth.onAuthStateChanged(u => { setUser(u); setAuthReady(true); });
+      }, []);
+
+      // Girişte: birleştir + canlı dinle
+      useEffect(() => {
+        if (!user) { ready.current = false; setStatus('off'); return; }
+        const fb = getFirebase();
+        const unsubs = [];
+        let cancelled = false;
+        (async () => {
+          setStatus('syncing'); setError('');
+          try {
+            const tsMap = tsAll();
+            for (const kind of SYNC_KINDS) {
+              const col = fb.db.collection('users').doc(user.uid).collection(kind);
+              const snap = await col.get();
+              if (cancelled) return;
+              const remote = new Map();
+              snap.forEach(d => remote.set(d.id, d.data()));
+              const local = dataRef.current[kind] || [];
+              const localIds = new Set(local.map(x => String(x.id)));
+              const uploads = [];
+              const remoteOnly = [];
+              const merged = [];
+              local.forEach(l => {
+                const id = String(l.id), r = remote.get(id), lj = JSON.stringify(l);
+                if (!r) { merged.push(l); uploads.push([id, lj]); return; }                  // yalnızca bu cihazda → yükle
+                if (r.deleted) {                                                              // başka cihazda silinmiş
+                  if ((tsMap[kind] || {})[id] > (r.ts || 0)) { merged.push(l); uploads.push([id, lj]); }
+                  return;
+                }
+                if (r.json === lj) { merged.push(l); return; }
+                if ((tsMap[kind] || {})[id] > (r.ts || 0)) { merged.push(l); uploads.push([id, lj]); }  // yerel daha yeni
+                else merged.push(JSON.parse(r.json));                                          // bulut daha yeni
+              });
+              remote.forEach((r, id) => { if (!localIds.has(id) && !r.deleted && r.json) remoteOnly.push(JSON.parse(r.json)); });
+              const final = [...remoteOnly, ...merged];
+
+              for (let i = 0; i < uploads.length; i += 400) {
+                const batch = fb.db.batch();
+                uploads.slice(i, i + 400).forEach(([id, json]) => batch.set(col.doc(id), { json, ts: Date.now(), deleted: false }));
+                await batch.commit();
+              }
+              synced.current[kind] = toMap(final);
+              seen.current = { ...(seen.current || {}), [kind]: toMap(final) };
+              setters[kind](final);
+
+              // Diğer cihazlardan gelen değişiklikleri canlı uygula
+              unsubs.push(col.onSnapshot(s => {
+                if (s.metadata.hasPendingWrites) return;
+                const changes = s.docChanges();
+                if (!changes.length) return;
+                setters[kind](prev => {
+                  let next = prev;
+                  changes.forEach(ch => {
+                    const id = ch.doc.id, r = ch.doc.data();
+                    const gone = ch.type === 'removed' || r.deleted;
+                    if (gone) {
+                      if (next.some(x => String(x.id) === id)) next = next.filter(x => String(x.id) !== id);
+                      synced.current[kind].delete(id);
+                      return;
+                    }
+                    if (synced.current[kind].get(id) === r.json) return;
+                    synced.current[kind].set(id, r.json);
+                    const item = JSON.parse(r.json);
+                    const idx = next.findIndex(x => String(x.id) === id);
+                    next = idx >= 0 ? next.map((x, i) => i === idx ? item : x) : [item, ...next];
+                  });
+                  return next;
+                });
+                setLastSync(new Date());
+              }, e => { setError('Canlı eşitleme hatası: ' + e.message); setStatus('error'); }));
+            }
+            if (cancelled) return;
+            ready.current = true;
+            setStatus('synced'); setLastSync(new Date());
+          } catch (e) {
+            if (cancelled) return;
+            setError('Eşitleme hatası: ' + (e && e.message ? e.message : e)); setStatus('error');
+          }
+        })();
+        return () => { cancelled = true; ready.current = false; unsubs.forEach(u => u()); };
+      }, [user]);
+
+      // Yerel değişiklikleri buluta gönder (1,2 sn gecikmeyle toplu)
+      useEffect(() => {
+        if (!user || !ready.current) return;
+        const t = setTimeout(async () => {
+          const fb = getFirebase(); if (!fb) return;
+          const ops = [];
+          SYNC_KINDS.forEach(kind => {
+            const cur = toMap(dataRef.current[kind]);
+            const prev = synced.current[kind];
+            cur.forEach((json, id) => { if (prev.get(id) !== json) ops.push([kind, id, json]); });
+            prev.forEach((_, id) => { if (!cur.has(id)) ops.push([kind, id, null]); });
+          });
+          if (!ops.length) return;
+          setStatus('syncing');
+          try {
+            for (let i = 0; i < ops.length; i += 400) {
+              const batch = fb.db.batch();
+              ops.slice(i, i + 400).forEach(([kind, id, json]) => {
+                const ref = fb.db.collection('users').doc(user.uid).collection(kind).doc(id);
+                batch.set(ref, json === null ? { json: '', ts: Date.now(), deleted: true } : { json, ts: Date.now(), deleted: false });
+              });
+              await batch.commit();
+            }
+            ops.forEach(([kind, id, json]) => { json === null ? synced.current[kind].delete(id) : synced.current[kind].set(id, json); });
+            setStatus('synced'); setLastSync(new Date()); setError('');
+          } catch (e) {
+            setError('Gönderilemedi: ' + (e && e.message ? e.message : e)); setStatus('error');
+          }
+        }, 1200);
+        return () => clearTimeout(t);
+      }, [weeks, readings, cards, user]);
+
+      const signIn = async () => {
+        const fb = getFirebase();
+        if (!fb) { setError('Firebase yüklenemedi (internet bağlantısını kontrol edin).'); return; }
+        setError('');
+        const provider = new firebase.auth.GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+        try { await fb.auth.signInWithPopup(provider); }
+        catch (e) {
+          if (e && /popup-blocked|operation-not-supported/.test(e.code || '')) { try { await fb.auth.signInWithRedirect(provider); } catch (e2) { setError(authErrorText(e2)); } }
+          else if (!(e && /popup-closed|cancelled-popup/.test(e.code || ''))) setError(authErrorText(e));
+        }
+      };
+      const signOut = async () => { const fb = getFirebase(); if (fb) await fb.auth.signOut(); };
+
+      return { user, authReady, status, error, lastSync, signIn, signOut, available: !!window.firebase };
+    }
+
+    const authErrorText = (e) => {
+      const c = (e && e.code) || '';
+      if (/unauthorized-domain/.test(c)) return 'Bu adres Firebase\'de izinli değil (Authentication → Settings → Authorized domains).';
+      if (/network/.test(c)) return 'Bağlantı hatası; internetinizi kontrol edin.';
+      return 'Giriş yapılamadı: ' + ((e && e.message) || c || 'bilinmeyen hata');
+    };
+
+    function SyncPanel({ sync }) {
+      if (!sync.available) {
+        return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400">☁️ Bulut eşitleme yüklenemedi (internet bağlantısı gerekli).</div>;
+      }
+      if (!sync.authReady) return <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-500">☁️ Kontrol ediliyor…</div>;
+      if (!sync.user) {
+        return (
+          <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-2">
+            <p><span className="font-bold text-slate-200">☁️ Cihazlar arası eşitleme</span><br />Giriş yapınca kelimeleriniz, metinleriniz ve kartlarınız tüm cihazlarınızda aynı olur.</p>
+            <button onClick={sync.signIn} className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-white text-slate-800 text-xs font-bold hover:bg-slate-100">
+              <svg width="14" height="14" viewBox="0 0 48 48" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.1 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+              Google ile giriş yap
+            </button>
+            {sync.error && <p className="text-red-400">{sync.error}</p>}
+          </div>
+        );
+      }
+      const label = { syncing: '⟳ Eşitleniyor…', synced: '✓ Eşitlendi' + (sync.lastSync ? ' · ' + sync.lastSync.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }) : ''), error: '⚠ Eşitleme sorunu', off: '' }[sync.status];
+      const cls = { syncing: 'text-blue-300', synced: 'text-emerald-400', error: 'text-red-400', off: 'text-slate-500' }[sync.status];
+      return (
+        <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1.5">
+          <div className="flex items-center gap-2">
+            {sync.user.photoURL
+              ? <img src={sync.user.photoURL} alt="" referrerPolicy="no-referrer" className="w-6 h-6 rounded-full" />
+              : <span className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold">{(sync.user.email || '?')[0].toUpperCase()}</span>}
+            <span className="truncate text-slate-200 font-semibold" title={sync.user.email}>{sync.user.displayName || sync.user.email}</span>
+          </div>
+          <p role="status" className={cls}>☁️ {label}</p>
+          {sync.error && <p className="text-red-400">{sync.error}</p>}
+          <button onClick={sync.signOut} className="text-[10px] text-slate-500 hover:text-slate-300 underline">Çıkış yap (veriler bu cihazda kalır)</button>
+        </div>
+      );
+    }
+
     // --- ANA UYGULAMA BİLEŞENİ ---
     function App() {
       const [activeTab, setActiveTab] = useState('dashboard');
       const [weeks, setWeeks] = useState(() => getStored(STORAGE_KEYS.WEEKS, []));
       const [readings, setReadings] = useState(() => getStored(STORAGE_KEYS.READINGS, []));
       const [cards, setCards] = useState(() => getStored(STORAGE_KEYS.VOCAB, []));
+      // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler ve kartlar tüm cihazlarda aynı olur)
+      const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards });
       const [settings, setSettings] = useState(() => getStored(STORAGE_KEYS.SETTINGS, {
         theme: 'dark',
         notificationTime: '20:00',
@@ -717,10 +963,7 @@
               ))}
             </nav>
 
-            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400">
-              <span className="font-bold text-slate-300">Kişisel İçerik Kuralı:</span>
-              <p className="mt-0.5">Yalnızca sizin yüklediğiniz okuma metinleri ve kelimeler saklanır.</p>
-            </div>
+            <SyncPanel sync={sync} />
           </aside>
 
           {/* Ana İçerik */}
