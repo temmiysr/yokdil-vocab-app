@@ -10,7 +10,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
 
   <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
@@ -62,9 +62,10 @@
   <div id="root"></div>
 
   <!-- React 18, ReactDOM 18 & Babel Standalone for direct browser execution -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Sürümler sabit: kütüphaneler güncellenince site habersizce bozulmasın -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.4/babel.min.js"></script>
 
   <!-- Standalone Browser App -->
   <script type="text/babel">
@@ -89,6 +90,88 @@
 
     function setStored(key, val) {
       localStorage.setItem(key, JSON.stringify(val));
+    }
+
+    // --- KALICI DEPOLAMA: IndexedDB ---
+    // localStorage ~5 MB ile sınırlı; uzun OCR metinleri ve çok sayıda kartla dolabilir. Veriler artık IndexedDB'de
+    // (yüzlerce MB) tutulur. İlk açılışta localStorage'daki eski veriler kopyalanır ve geri okunarak doğrulanır;
+    // eski kayıtlar SİLİNMEZ (yedek olarak kalır).
+    const IDB_NAME = 'yokdil-master', IDB_STORE = 'kv';
+    const STORAGE_MODE_KEY = 'yokdil_storage_mode_v2';   // 'idb' → veriler IndexedDB'de
+    let idbPromise = null;
+    const idbOpen = () => {
+      if (!idbPromise) {
+        idbPromise = new Promise((resolve, reject) => {
+          if (!window.indexedDB) return reject(new Error('IndexedDB yok'));
+          const req = indexedDB.open(IDB_NAME, 1);
+          req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+          req.onblocked = () => reject(new Error('IndexedDB engellendi'));
+        });
+        idbPromise.catch(() => { idbPromise = null; });
+      }
+      return idbPromise;
+    };
+    const idbGet = async (key) => {
+      const db = await idbOpen();
+      return new Promise((resolve, reject) => {
+        const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key);
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    };
+    const idbSet = async (key, val) => {
+      const db = await idbOpen();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).put(val, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('İşlem iptal edildi'));
+      });
+    };
+    const isQuotaError = (e) => !!e && (e.name === 'QuotaExceededError' || e.code === 22 || /quota/i.test(e.message || ''));
+
+    // Açılışta tüm veriyi yükler (gerekirse localStorage → IndexedDB taşıması yapar)
+    const DATA_KEYS = [STORAGE_KEYS.WEEKS, STORAGE_KEYS.READINGS, STORAGE_KEYS.VOCAB, STORAGE_KEYS.SETTINGS];
+    async function loadAllData() {
+      const fromLocal = () => Object.fromEntries(DATA_KEYS.map(k => [k, getStored(k, undefined)]));
+      try {
+        if (localStorage.getItem(STORAGE_MODE_KEY) === 'idb') {
+          const out = {};
+          for (const k of DATA_KEYS) {
+            const v = await idbGet(k);
+            out[k] = v !== undefined ? v : getStored(k, undefined);   // IndexedDB'de yoksa eski yedeğe düş
+          }
+          return { data: out, mode: 'idb' };
+        }
+        // İlk açılış: taşı + doğrula
+        const local = fromLocal();
+        for (const k of DATA_KEYS) if (local[k] !== undefined) await idbSet(k, local[k]);
+        for (const k of DATA_KEYS) {
+          if (local[k] === undefined) continue;
+          const back = await idbGet(k);
+          if (JSON.stringify(back) !== JSON.stringify(local[k])) throw new Error('Taşıma doğrulanamadı: ' + k);
+        }
+        localStorage.setItem(STORAGE_MODE_KEY, 'idb');
+        try { localStorage.setItem('yokdil_migrated_at', new Date().toISOString()); } catch (e) {}
+        return { data: local, mode: 'idb', migrated: true };
+      } catch (e) {
+        console.warn('IndexedDB kullanılamadı, localStorage ile devam ediliyor:', e);
+        return { data: fromLocal(), mode: 'local', error: e };
+      }
+    }
+
+    // Tek bir anahtarı kalıcı kaydeder; başarısızsa hatayı döndürür
+    async function persistKey(mode, key, val) {
+      try {
+        if (mode === 'idb') await idbSet(key, val);
+        else localStorage.setItem(key, JSON.stringify(val));
+        return null;
+      } catch (e) {
+        return e;
+      }
     }
 
     // --- SM-2 ARALIKLI TEKRAR MOTORU ---
@@ -256,7 +339,14 @@
     const CACHE_KEYS = { FREQ: 'yokdil_freq_cache_v1', DICT: 'yokdil_dict_cache_v2' };
     try { localStorage.removeItem('yokdil_dict_cache_v1'); } catch (e) {}           // eski (yalnızca MyMemory) önbellek
     const cacheGet = (k) => { try { return JSON.parse(localStorage.getItem(k) || '{}'); } catch (e) { return {}; } };
-    const cacheSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+    // Önbellek en fazla CACHE_MAX kayıt tutar (en eskiler atılır) ki asıl verilere yer kalsın
+    const CACHE_MAX = 1500;
+    const cacheSet = (k, v) => {
+      const keys = Object.keys(v);
+      if (keys.length > CACHE_MAX) keys.slice(0, keys.length - CACHE_MAX).forEach(x => delete v[x]);
+      try { localStorage.setItem(k, JSON.stringify(v)); }
+      catch (e) { try { localStorage.removeItem(k); } catch (e2) {} }   // yer yoksa önbelleği bırak
+    };
 
     // Datamuse: kelimenin sıklığı (milyonda) ve etiketleri; bulunamazsa null
     const freqCache = cacheGet(CACHE_KEYS.FREQ);
@@ -565,6 +655,8 @@
     // Eşitlenen veri türleri (Ayarlar bilerek dahil değil: Telegram token'ı gibi gizli bilgiler buluta gitmez)
     const SYNC_KINDS = ['weeks', 'readings', 'cards'];
     const SYNC_TS_KEY = 'yokdil_sync_ts_v1';            // { kind: { id: son yerel değişiklik zamanı } }
+    // Firestore'da bir belge en fazla 1 MB olabilir; daha büyük öğe toplu gönderimi tümden bozar → atlanır (cihazda kalır)
+    const SYNC_MAX_BYTES = 900000;
 
     let fbCache = null;
     const getFirebase = () => {
@@ -588,6 +680,7 @@
       const [status, setStatus] = useState('off');      // off | syncing | synced | error
       const [error, setError] = useState('');
       const [lastSync, setLastSync] = useState(null);
+      const [tooBig, setTooBig] = useState([]);          // buluta sığmadığı için yalnızca bu cihazda kalan öğeler
       const data = { weeks, readings, cards };
       const setters = { weeks: setWeeks, readings: setReadings, cards: setCards };
       const dataRef = useRef(data); dataRef.current = data;
@@ -655,9 +748,11 @@
               remote.forEach((r, id) => { if (!localIds.has(id) && !r.deleted && r.json) remoteOnly.push(JSON.parse(r.json)); });
               const final = [...remoteOnly, ...merged];
 
-              for (let i = 0; i < uploads.length; i += 400) {
+              const okUploads = uploads.filter(([, json]) => json.length <= SYNC_MAX_BYTES);
+              if (okUploads.length < uploads.length) setTooBig(prev => [...new Set([...prev, ...uploads.filter(([, j]) => j.length > SYNC_MAX_BYTES).map(([id]) => id)])]);
+              for (let i = 0; i < okUploads.length; i += 400) {
                 const batch = fb.db.batch();
-                uploads.slice(i, i + 400).forEach(([id, json]) => batch.set(col.doc(id), { json, ts: Date.now(), deleted: false }));
+                okUploads.slice(i, i + 400).forEach(([id, json]) => batch.set(col.doc(id), { json, ts: Date.now(), deleted: false }));
                 await batch.commit();
               }
               synced.current[kind] = toMap(final);
@@ -706,13 +801,18 @@
         if (!user || !ready.current) return;
         const t = setTimeout(async () => {
           const fb = getFirebase(); if (!fb) return;
-          const ops = [];
+          const ops = [], big = [];
           SYNC_KINDS.forEach(kind => {
             const cur = toMap(dataRef.current[kind]);
             const prev = synced.current[kind];
-            cur.forEach((json, id) => { if (prev.get(id) !== json) ops.push([kind, id, json]); });
+            cur.forEach((json, id) => {
+              if (prev.get(id) === json) return;
+              if (json.length > SYNC_MAX_BYTES) { big.push(id); return; }   // çok büyük: buluta gönderilmez
+              ops.push([kind, id, json]);
+            });
             prev.forEach((_, id) => { if (!cur.has(id)) ops.push([kind, id, null]); });
           });
+          if (big.length) setTooBig(prevB => [...new Set([...prevB, ...big])]);
           if (!ops.length) return;
           setStatus('syncing');
           try {
@@ -747,7 +847,7 @@
       };
       const signOut = async () => { const fb = getFirebase(); if (fb) await fb.auth.signOut(); };
 
-      return { user, authReady, status, error, lastSync, signIn, signOut, available: !!window.firebase };
+      return { user, authReady, status, error, lastSync, signIn, signOut, available: !!window.firebase, tooBig };
     }
 
     const authErrorText = (e) => {
@@ -800,6 +900,7 @@
           </div>
           <p role="status" className={cls}>☁️ {label}</p>
           {sync.error && <p className="text-red-400">{sync.error}</p>}
+          {(sync.tooBig || []).length > 0 && <p className="text-amber-400">{sync.tooBig.length} çok uzun metin buluta sığmadığı için yalnızca bu cihazda saklanıyor.</p>}
           <button onClick={sync.signOut} className="text-[10px] text-slate-500 hover:text-slate-300 underline">Çıkış yap (veriler bu cihazda kalır)</button>
           {links}
         </div>
@@ -807,11 +908,12 @@
     }
 
     // --- ANA UYGULAMA BİLEŞENİ ---
-    function App() {
+    function App({ initial, storageMode }) {
       const [activeTab, setActiveTab] = useState('dashboard');
-      const [weeks, setWeeks] = useState(() => getStored(STORAGE_KEYS.WEEKS, []));
-      const [readings, setReadings] = useState(() => getStored(STORAGE_KEYS.READINGS, []));
-      const [cards, setCards] = useState(() => getStored(STORAGE_KEYS.VOCAB, []));
+      const [weeks, setWeeks] = useState(() => initial[STORAGE_KEYS.WEEKS] || []);
+      const [readings, setReadings] = useState(() => initial[STORAGE_KEYS.READINGS] || []);
+      const [cards, setCards] = useState(() => initial[STORAGE_KEYS.VOCAB] || []);
+      const [storageWarning, setStorageWarning] = useState('');
       // Bulut eşitleme (Google ile giriş yapılınca haftalar, metinler ve kartlar tüm cihazlarda aynı olur)
       const sync = useCloudSync({ weeks, setWeeks, readings, setReadings, cards, setCards });
 
@@ -854,7 +956,7 @@
           showToast('Yedek yüklenemedi: ' + (e instanceof SyntaxError ? 'dosya geçerli bir yedek değil.' : (e && e.message ? e.message : 'dosya okunamadı')), true);
         }
       };
-      const [settings, setSettings] = useState(() => getStored(STORAGE_KEYS.SETTINGS, {
+      const [settings, setSettings] = useState(() => initial[STORAGE_KEYS.SETTINGS] || ({
         theme: 'dark',
         notificationTime: '20:00',
         telegramEnabled: false,
@@ -863,6 +965,16 @@
         appUrl: window.location.href,
         cloudProvider: 'none'
       }));
+
+      // Kalıcı kayıt (IndexedDB; olmazsa localStorage). Kayıt başarısız olursa sessiz kalmaz, uyarı gösterir.
+      const persist = (key, val) => {
+        persistKey(storageMode, key, val).then(err => {
+          if (!err) return;
+          setStorageWarning(isQuotaError(err)
+            ? 'Depolama alanı doldu; son değişiklikler bu cihaza kaydedilemedi. "⬇ Yedek indir" ile yedek alın ve kullanılmayan uzun metinleri silin.'
+            : 'Veriler kaydedilemedi: ' + (err.message || err) + '. "⬇ Yedek indir" ile yedek almanız önerilir.');
+        });
+      };
 
       // Modallar ve Detay Durumları
       const [selectedWeekId, setSelectedWeekId] = useState(null);
@@ -883,12 +995,21 @@
       const [selectionText, setSelectionText] = useState('');
       const [popoverPos, setPopoverPos] = useState(null);
 
+      useEffect(() => { persist(STORAGE_KEYS.WEEKS, weeks); }, [weeks]);
+      useEffect(() => { persist(STORAGE_KEYS.READINGS, readings); }, [readings]);
+
+      // Tarayıcıdan kalıcı depolama iste (yer daralınca verilerin otomatik silinmesini önler) + doluluk kontrolü
       useEffect(() => {
-        setStored(STORAGE_KEYS.WEEKS, weeks);
-      }, [weeks]);
-      useEffect(() => {
-        setStored(STORAGE_KEYS.READINGS, readings);
-      }, [readings]);
+        (async () => {
+          try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+          try {
+            if (navigator.storage && navigator.storage.estimate) {
+              const { usage, quota } = await navigator.storage.estimate();
+              if (quota && usage / quota > 0.85) setStorageWarning('Depolama alanının %' + Math.round(usage / quota * 100) + '\'i dolu. "⬇ Yedek indir" ile yedek alın.');
+            }
+          } catch (e) {}
+        })();
+      }, []);
 
       const deleteReading = (id) => {
         const r = readings.find(x => x.id === id);
@@ -897,12 +1018,8 @@
         setReadings(prev => prev.filter(x => x.id !== id));
         if (selectedReadingId === id) setSelectedReadingId(null);
       };
-      useEffect(() => {
-        setStored(STORAGE_KEYS.VOCAB, cards);
-      }, [cards]);
-      useEffect(() => {
-        setStored(STORAGE_KEYS.SETTINGS, settings);
-      }, [settings]);
+      useEffect(() => { persist(STORAGE_KEYS.VOCAB, cards); }, [cards]);
+      useEffect(() => { persist(STORAGE_KEYS.SETTINGS, settings); }, [settings]);
 
       // Hesaplamalar
       const today = getTodayStr();
@@ -1477,6 +1594,14 @@
                 setTimeout(() => setToast(''), 4000);
               }}
             />
+          )}
+
+          {storageWarning && (
+            <div role="alert" className="fixed top-3 left-1/2 -translate-x-1/2 z-50 max-w-xl w-[92vw] px-4 py-3 rounded-xl bg-red-700 text-white text-xs font-semibold shadow-2xl flex items-start gap-3">
+              <span className="flex-1">⚠ {storageWarning}</span>
+              <button onClick={exportBackup} className="px-2 py-1 rounded bg-white text-red-700 font-bold whitespace-nowrap">Yedek indir</button>
+              <button onClick={() => setStorageWarning('')} aria-label="Uyarıyı kapat" className="px-1 text-white/80 hover:text-white">✕</button>
+            </div>
           )}
 
           {toast && (
@@ -2936,8 +3061,23 @@
       );
     }
 
+    // Önce veriyi yükle (gerekirse localStorage → IndexedDB taşı), sonra uygulamayı göster
+    function Root() {
+      const [loaded, setLoaded] = useState(null);
+      useEffect(() => { loadAllData().then(setLoaded); }, []);
+      if (!loaded) {
+        return (
+          <div className="h-screen flex items-center justify-center text-slate-400 text-sm gap-3">
+            <span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+            Verileriniz yükleniyor…
+          </div>
+        );
+      }
+      return <App initial={loaded.data} storageMode={loaded.mode} />;
+    }
+
     const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    root.render(<Root />);
   </script>
 </body>
 </html>
