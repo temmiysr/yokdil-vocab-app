@@ -49,6 +49,11 @@ export interface VocabCard {
   prepositions?: string[];
   // 9. Yaygın kelime birliktelikleri (collocations)
   collocations?: string[];
+  // Eş ve Zıt Anlamlılar (Paraphrasing & Sınav Stratejisi)
+  synonyms?: string[];
+  antonyms?: string[];
+  // YÖKDİL Soru Tipi Sınıflandırması (Örn: Soru 1-6, Soru 7-16, Cloze Test)
+  questionType?: string;
   // 10. Varsa ilgili akademik kullanım
   academicUsage?: string;
   // 11. Ait olduğu okuma parçası ve hafta
@@ -88,3 +93,13 @@ export type YokdilCategory =
   | 'Akademik Zarflar'
   | 'Edatlar & Prepositions'
   | 'Kalıp İfadeler & Collocations';
+
+export const YOKDIL_QUESTION_TYPES = [
+  { id: 'vocabulary', label: 'Kelime Soruları (Soru 1-6)' },
+  { id: 'grammar_preposition', label: 'Gramer & Edat (Soru 7-16)' },
+  { id: 'cloze_test', label: 'Cloze Test (Soru 17-26)' },
+  { id: 'sentence_completion', label: 'Cümle Tamamlama (Soru 27-36)' },
+  { id: 'translation', label: 'Çeviri Soruları (Soru 37-48)' },
+  { id: 'paragraph', label: 'Paragraf Soruları (Soru 49-80)' },
+  { id: 'general', label: 'Genel Akademik Kullanım' }
+] as const;

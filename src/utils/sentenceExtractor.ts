@@ -101,6 +101,59 @@ export function findDuplicateCard(cards: VocabCard[], wordToFind: string): Vocab
 }
 
 /**
+ * Seçilen kelimenin etrafındaki dilbilgisel bağlamı analiz ederek
+ * akıllı kalıp ifadeyi (collocation / prepositional phrase) tespit eder.
+ */
+export function findSmartCollocation(sentence: string, target: string): string {
+  if (!sentence || !target || target.length < 2) return '';
+  const cleanTarget = target.trim();
+  const lowerSentence = sentence.toLowerCase();
+  const lowerTarget = cleanTarget.toLowerCase();
+  const idx = lowerSentence.indexOf(lowerTarget);
+  if (idx === -1) return '';
+
+  const beforeText = sentence.slice(0, idx).trim();
+  const afterText = sentence.slice(idx + cleanTarget.length).trim();
+
+  const beforeTokens = beforeText ? beforeText.split(/\s+/) : [];
+  const afterTokens = afterText ? afterText.split(/\s+/) : [];
+
+  const prepositions = new Set(['of', 'to', 'in', 'on', 'with', 'for', 'from', 'at', 'by', 'into', 'as', 'about', 'against', 'upon', 'between']);
+  const articles = new Set(['a', 'an', 'the']);
+  const verbs = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'remains', 'remained', 'becomes', 'became', 'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might', 'must']);
+
+  // Durum A: Hedef kelimeden hemen sonra edat geliyorsa (ör: "shortage" + "of natural resources" veya "associated" + "with ...")
+  if (afterTokens.length >= 2 && prepositions.has(afterTokens[0].toLowerCase().replace(/[^a-z]/g, ''))) {
+    const prep = afterTokens[0].replace(/[^a-z]/g, '');
+    const nextWords: string[] = [];
+    let i = 1;
+    if (i < afterTokens.length && articles.has(afterTokens[i].toLowerCase().replace(/[^a-z]/g, ''))) {
+      nextWords.push(afterTokens[i]);
+      i++;
+    }
+    while (i < afterTokens.length && nextWords.length < 2) {
+      const cleanW = afterTokens[i].replace(/[.,;:!?()"']/g, '');
+      if (!cleanW || prepositions.has(cleanW.toLowerCase()) || verbs.has(cleanW.toLowerCase())) break;
+      nextWords.push(cleanW);
+      i++;
+    }
+    if (nextWords.length > 0) {
+      return (cleanTarget + ' ' + prep + ' ' + nextWords.join(' ')).trim();
+    }
+  }
+
+  // Durum B: Hedef kelime öncesinde niteleyici sıfat/isim varsa (ör: "agricultural" + "production", "major" + "challenge")
+  if (beforeTokens.length >= 1 && cleanTarget.split(/\s+/).length <= 2) {
+    const prevWord = beforeTokens[beforeTokens.length - 1].replace(/^[.,;:!?()"']+|[.,;:!?()"']+$/g, '');
+    if (prevWord.length > 2 && !articles.has(prevWord.toLowerCase()) && !prepositions.has(prevWord.toLowerCase())) {
+      return (prevWord + ' ' + cleanTarget).trim();
+    }
+  }
+
+  return '';
+}
+
+/**
  * Okuma metninde kaydedilmiş kelimelerin vurgulanması için metni segmentlere ayırır.
  */
 export interface HighlightSegment {

@@ -320,6 +320,153 @@
       return text.slice(start, end).trim().replace(/\s+/g, ' ');
     }
 
+    // Akıllı Kalıp İfade Genişletme (Smart Phrase Expansion)
+    function findSmartCollocation(sentence, target) {
+      if (!sentence || !target || target.length < 2) return '';
+      const cleanTarget = target.trim();
+      const lowerSentence = sentence.toLowerCase();
+      const lowerTarget = cleanTarget.toLowerCase();
+      const idx = lowerSentence.indexOf(lowerTarget);
+      if (idx === -1) return '';
+
+      const beforeText = sentence.slice(0, idx).trim();
+      const afterText = sentence.slice(idx + cleanTarget.length).trim();
+
+      const beforeTokens = beforeText ? beforeText.split(/\s+/) : [];
+      const afterTokens = afterText ? afterText.split(/\s+/) : [];
+
+      const prepositions = new Set(['of', 'to', 'in', 'on', 'with', 'for', 'from', 'at', 'by', 'into', 'as', 'about', 'against', 'upon', 'between']);
+      const articles = new Set(['a', 'an', 'the']);
+      const verbs = new Set(['is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'remains', 'remained', 'becomes', 'became', 'can', 'could', 'will', 'would', 'shall', 'should', 'may', 'might', 'must']);
+
+      if (afterTokens.length >= 2 && prepositions.has(afterTokens[0].toLowerCase().replace(/[^a-z]/g, ''))) {
+        const prep = afterTokens[0].replace(/[^a-z]/g, '');
+        const nextWords = [];
+        let i = 1;
+        if (i < afterTokens.length && articles.has(afterTokens[i].toLowerCase().replace(/[^a-z]/g, ''))) {
+          nextWords.push(afterTokens[i]);
+          i++;
+        }
+        while (i < afterTokens.length && nextWords.length < 2) {
+          const cleanW = afterTokens[i].replace(/[.,;:!?()"']/g, '');
+          if (!cleanW || prepositions.has(cleanW.toLowerCase()) || verbs.has(cleanW.toLowerCase())) break;
+          nextWords.push(cleanW);
+          i++;
+        }
+        if (nextWords.length > 0) {
+          return (cleanTarget + ' ' + prep + ' ' + nextWords.join(' ')).trim();
+        }
+      }
+
+      if (beforeTokens.length >= 1 && cleanTarget.split(/\s+/).length <= 2) {
+        const prevWord = beforeTokens[beforeTokens.length - 1].replace(/^[.,;:!?()"']+|[.,;:!?()"']+$/g, '');
+        if (prevWord.length > 2 && !articles.has(prevWord.toLowerCase()) && !prepositions.has(prevWord.toLowerCase())) {
+          return (prevWord + ' ' + cleanTarget).trim();
+        }
+      }
+      return '';
+    }
+
+    // Dokunsal Titreşim (Haptics) Desteği
+    function triggerHaptic(duration = 30) {
+      try {
+        if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+          window.navigator.vibrate(duration);
+        }
+      } catch (e) {}
+    }
+
+    // Bionic Reading Kelime Biçimlendirici (Akademik Odaklanma)
+    function formatBionicWord(word, key) {
+      const m = word.match(/^([^A-Za-z]*)([A-Za-z]+)([^A-Za-z]*)$/);
+      if (!m) return word + ' ';
+      const lead = m[1], letters = m[2], trail = m[3];
+      const len = letters.length;
+      const fix = len <= 3 ? 1 : len <= 5 ? 2 : len <= 7 ? 3 : Math.ceil(len * 0.45);
+      const boldPart = letters.slice(0, fix);
+      const restPart = letters.slice(fix);
+      return (
+        <span key={key}>
+          {lead}
+          <strong className="font-extrabold text-white">{boldPart}</strong>
+          <span className="opacity-80">{restPart}</span>
+          {trail}{' '}
+        </span>
+      );
+    }
+
+    // --- YÖKDİL ÇIKMIŞ SINAV & DENEME AYRIŞTIRICI (EXAM PARSER) ---
+    function parseYokdilExamText(text, answerKeyText = '') {
+      if (!text || text.trim().length < 20) return [];
+
+      const answersMap = new Map();
+      const combinedForKeys = (answerKeyText + '\n' + text);
+      const keyMatches = combinedForKeys.matchAll(/(?:^|[\s,;])(\d{1,2})\s*[-.:)]\s*([A-Ea-e])(?=[\s,;]|$)/g);
+      for (const km of keyMatches) {
+        const qn = parseInt(km[1], 10);
+        const ans = km[2].toUpperCase();
+        if (qn >= 1 && qn <= 80 && !answersMap.has(qn)) {
+          answersMap.set(qn, ans);
+        }
+      }
+
+      const clean = text
+        .replace(/\r\n/g, '\n')
+        .replace(/\d{1,2}\s*[-–]\s*\d{1,2}\.\s*sorularda[^\n]+/gi, '')
+        .replace(/CEVAP ANAHTARI[\s\S]*$/i, '');
+
+      const qRegex = /(?:^|\n)\s*(\d{1,2})\s*[\.\)]\s*([\s\S]*?)(?=(?:^|\n)\s*\d{1,2}\s*[\.\)]|\s*$)/g;
+      const questions = [];
+
+      for (const m of clean.matchAll(qRegex)) {
+        const num = parseInt(m[1], 10);
+        const body = m[2].trim();
+        if (num < 1 || num > 80 || body.length < 10) continue;
+
+        const optRegex = /(?:^|\s|\n)([A-Ea-e])\s*[\)\.\-]\s*([\s\S]*?)(?=(?:^|\s|\n)[A-Ea-e]\s*[\)\.\-]|\s*$)/g;
+        const optsFound = [];
+        let promptEnd = -1;
+
+        for (const om of body.matchAll(optRegex)) {
+          if (promptEnd === -1) {
+            promptEnd = om.index;
+          }
+          optsFound.push({ letter: om[1].toUpperCase(), text: om[2].trim().replace(/\s+/g, ' ') });
+        }
+
+        if (optsFound.length >= 4) {
+          const prompt = promptEnd > 0 ? body.slice(0, promptEnd).trim().replace(/\s+/g, ' ') : body;
+          const options = ['A', 'B', 'C', 'D', 'E'].map(L => {
+            const found = optsFound.find(o => o.letter === L);
+            return found ? found.text : '';
+          });
+
+          let category = 'Genel';
+          if (num <= 6) category = 'Kelime Soruları (Soru 1-6)';
+          else if (num <= 16) category = 'Gramer & Edat (Soru 7-16)';
+          else if (num <= 26) category = 'Cloze Test (Soru 17-26)';
+          else if (num <= 36) category = 'Cümle Tamamlama (Soru 27-36)';
+          else if (num <= 48) category = 'Çeviri Soruları (Soru 37-48)';
+          else if (num <= 60) category = 'Paragraf & Anlam Bütünlüğü (Soru 49-60)';
+          else category = 'Okuma Parçası Soruları (Soru 61-80)';
+
+          const correctLetter = answersMap.get(num);
+          const answerIdx = correctLetter ? ['A', 'B', 'C', 'D', 'E'].indexOf(correctLetter) : -1;
+
+          questions.push({
+            num,
+            prompt,
+            options,
+            answer: answerIdx,
+            category,
+            correctLetter: correctLetter || ''
+          });
+        }
+      }
+
+      return questions;
+    }
+
     // --- OTOMATİK KELİME ÇIKARMA VE SÖZLÜK ---
     // Kaynaklar (ücretsiz, anahtar gerektirmez; yalnızca İngilizce kelime gönderilir):
     //   Datamuse (kelime sıklığı, eş/zıt anlam) · dictionaryapi.dev (IPA, ses, tanım, örnek) · MyMemory (Türkçe karşılık)
@@ -1037,15 +1184,72 @@
       const [initialSentence, setInitialSentence] = useState('');
       const [isNewWeekOpen, setIsNewWeekOpen] = useState(false);
       const [isUploadReadingOpen, setIsUploadReadingOpen] = useState(false);
+      const [isUploadExamOpen, setIsUploadExamOpen] = useState(false);
+      const [customExams, setCustomExams] = useState(() => getStored('custom_exams', []));
       const [autoVocabReadingId, setAutoVocabReadingId] = useState(null);
       const [recentCardIds, setRecentCardIds] = useState([]);
       const [toast, setToast] = useState('');
       const showToast = (msg, isError) => { setToast((isError ? '⚠ ' : '') + msg); setTimeout(() => setToast(''), 6000); };
       const [duplicateCard, setDuplicateCard] = useState(null);
 
+      useEffect(() => {
+        setStored('custom_exams', customExams);
+      }, [customExams]);
+
+      const handleExtractVocabFromExam = (exam) => {
+        const vocabQs = exam.questions.filter(q => q.num <= 6 || q.category.includes('Kelime'));
+        if (!vocabQs.length) {
+          showToast('Bu sınavda ayrıştırılmış kelime sorusu bulunamadı.', true);
+          return;
+        }
+        const existingWords = new Set(cards.map(c => String(c.lemma || c.english).toLowerCase()));
+        const newCards = [];
+        const now = new Date().toISOString();
+
+        vocabQs.forEach(q => {
+          q.options.forEach((opt, idx) => {
+            const clean = opt.trim().toLowerCase().replace(/[^a-z\s-]/g, '');
+            if (clean.length >= 3 && !existingWords.has(clean) && !STOPWORDS.has(clean)) {
+              existingWords.add(clean);
+              const isCorrect = q.answer === idx;
+              const cardId = 'card_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+              newCards.push({
+                id: cardId,
+                english: opt.trim(),
+                lemma: clean,
+                turkish: '(çıkmış sınav kelimesi)',
+                partOfSpeech: clean.endsWith('ly') ? 'adverb' : clean.endsWith('tion') ? 'noun' : 'verb',
+                originalSentence: isCorrect ? q.prompt.replace(/----/g, opt.trim()) : q.prompt,
+                questionType: 'Kelime Soruları (Soru 1-6)',
+                sourceType: 'verified_exam',
+                examInfo: {
+                  year: exam.year,
+                  term: exam.term,
+                  field: exam.field,
+                  verified: true
+                },
+                isDifficult: false,
+                srs: createSRS(cardId),
+                createdAt: now,
+                updatedAt: now
+              });
+            }
+          });
+        });
+
+        if (newCards.length > 0) {
+          setCards([...newCards, ...cards]);
+          showToast(`"${exam.title}" sınavından ${newCards.length} doğrulanmış çıkmış kelime bankanıza eklendi!`);
+        } else {
+          showToast('Sınavdaki hedef kelimeler zaten kelime bankanızda mevcut.');
+        }
+      };
+
       // Metin Seçimi ve Popover
       const [selectionText, setSelectionText] = useState('');
       const [popoverPos, setPopoverPos] = useState(null);
+      const [expandedPhrase, setExpandedPhrase] = useState('');
+      const [bionicReading, setBionicReading] = useState(false);
 
       // --- Tıkla-anlam: okuma ekranında tek tıkla kelimenin anlamı ---
       const [wordPop, setWordPop] = useState(null);       // { word, sentence, x, y, top, readingId }
@@ -1053,6 +1257,7 @@
       const [sentenceToAnalyze, setSentenceToAnalyze] = useState(null);
       const [audioOpen, setAudioOpen] = useState(false);
       const [moreOpen, setMoreOpen] = useState(false);
+      const [examPreset, setExamPreset] = useState(null);   // { weekly: true } → Sınav sekmesinde haftalık check-up başlat
       const handleWordClick = (e, reading) => {
         const sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;   // seçim yapılıyorsa eski akış
@@ -1162,15 +1367,20 @@
         const sel = window.getSelection();
         if (!sel || sel.isCollapsed) {
           setPopoverPos(null);
+          setExpandedPhrase('');
           return;
         }
         const text = sel.toString().trim();
         if (text.length >= 2) {
           const range = sel.getRangeAt(0);
           const rect = range.getBoundingClientRect();
-          const sentence = extractSentence(readingContent, text);
+          const cleanContent = readingContent.replace(/^##\s+/gm, '');
+          const sentence = extractSentence(cleanContent, text);
           setSelectionText(text);
           setInitialSentence(sentence);
+          // Akıllı Kalıp İfade Genişletme (Smart Phrase Expansion)
+          const smartExp = findSmartCollocation(sentence, text);
+          setExpandedPhrase(smartExp && smartExp.toLowerCase() !== text.toLowerCase() ? smartExp : '');
           setPopoverPos({ top: rect.top, left: rect.left + rect.width / 2 });
         }
       };
@@ -1563,6 +1773,15 @@
                           );
                         })()}
 
+                        {/* Okuma Modu ve Yardımcı Araçlar */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
+                          <span className="text-slate-400 font-medium">💡 İpucu: Kelimeye tıklayıp anlamını görün veya fareyle/dokunarak seçip kalıp olarak ekleyin.</span>
+                          <label className="flex items-center gap-1.5 text-xs text-amber-300 cursor-pointer select-none font-bold bg-amber-950/40 px-2.5 py-1 rounded-lg border border-amber-800/60 hover:bg-amber-950/70 transition">
+                            <input type="checkbox" checked={bionicReading} onChange={e => setBionicReading(e.target.checked)} className="accent-amber-400" />
+                            ⚡ Bionic Reading (Akademik Odak)
+                          </label>
+                        </div>
+
                         {/* Metin Alanı ve Seçim */}
                         <div
                           data-reader
@@ -1577,13 +1796,22 @@
                             // AWL vurgusu (çok uzun metinlerde performans için kapalı)
                             const hl = awlHighlight && current.content.length < 120000;
                             const bank = hl ? new Set(cards.map(c => String(c.lemma || c.english).toLowerCase())) : null;
-                            const renderLine = (line) => !hl ? line : line.split(/([A-Za-z]+)/).map((tok, k) => {
-                              if (k % 2 === 0) return tok;
-                              const w = tok.toLowerCase();
-                              if (w.length < 3 || STOPWORDS.has(w) || !awlSublist(w)) return tok;
-                              const own = bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
-                              return <span key={k} className={"underline decoration-2 underline-offset-4 " + (own ? 'decoration-emerald-500/70' : 'decoration-purple-400')}>{tok}</span>;
-                            });
+                            const renderLine = (line) => {
+                              if (bionicReading) {
+                                return line.split(/(\s+)/).map((tok, k) => {
+                                  if (/^\s+$/.test(tok)) return tok;
+                                  return formatBionicWord(tok, k);
+                                });
+                              }
+                              if (!hl) return line;
+                              return line.split(/([A-Za-z]+)/).map((tok, k) => {
+                                if (k % 2 === 0) return tok;
+                                const w = tok.toLowerCase();
+                                if (w.length < 3 || STOPWORDS.has(w) || !awlSublist(w)) return tok;
+                                const own = bank.has(w) || lemmaCandidates(w).some(x => bank.has(x));
+                                return <span key={k} className={"underline decoration-2 underline-offset-4 " + (own ? 'decoration-emerald-500/70' : 'decoration-purple-400')}>{tok}</span>;
+                              });
+                            };
                             return current.content.split('\n').map((line, i) => (
                               /^##\s+/.test(line)
                                 ? <strong key={i} className="block font-sans font-black text-white text-lg leading-snug mt-2 mb-1">{line.replace(/^##\s+/, '')}</strong>
@@ -1653,7 +1881,21 @@
                 <ExamSection
                   cards={cards}
                   readings={readings}
+                  customExams={customExams}
+                  onOpenUploadExam={() => setIsUploadExamOpen(true)}
+                  onDeleteExam={(id) => {
+                    if (window.confirm('Bu çıkmış sınavı silmek istediğinize emin misiniz?')) {
+                      setCustomExams(prev => prev.filter(e => e.id !== id));
+                      showToast('Sınav silindi.');
+                    }
+                  }}
+                  onExtractVocabFromExam={handleExtractVocabFromExam}
                   onAnswer={(type, ok) => logActivity({ examQ: 1, examCorrect: ok ? 1 : 0 }, { [type]: [ok ? 1 : 0, 1] })}
+                  prepBest={settings.prepBest || 0}
+                  onPrepBest={(n) => setSettings(s => ({ ...s, prepBest: n }))}
+                  preset={examPreset}
+                  onPresetUsed={() => setExamPreset(null)}
+                  onCheckupDone={(c, n) => { logActivity({ checkups: 1, checkupCorrect: c, checkupTotal: n }); showToast('Haftalık check-up: ' + c + '/' + n + ' (%' + Math.round(c / n * 100) + ')'); }}
                   onMarkDifficult={(ids) => {
                     const set = new Set(ids);
                     setCards(prev => prev.map(c => set.has(c.id) ? { ...c, isDifficult: true, updatedAt: new Date().toISOString() } : c));
@@ -1797,7 +2039,7 @@
           {popoverPos && (
             <div
               style={{ top: `${popoverPos.top}px`, left: `${popoverPos.left}px`, transform: 'translate(-50%, -100%) translateY(-10px)' }}
-              className="fixed z-50 bg-slate-950 border border-slate-700 text-white p-2 rounded-xl shadow-2xl flex items-center gap-2"
+              className="fixed z-50 bg-slate-950 border border-slate-700 text-white p-2 rounded-xl shadow-2xl flex flex-wrap items-center gap-2 max-w-sm"
             >
               <button
                 onClick={handleAddSelection}
@@ -1805,6 +2047,18 @@
               >
                 + Kelime Listeme Ekle
               </button>
+              {expandedPhrase && (
+                <button
+                  onClick={() => {
+                    setSelectionText(expandedPhrase);
+                    setExpandedPhrase('');
+                  }}
+                  title="Seçimi bu tamlamaya/kalıba genişlet"
+                  className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white shadow transition flex items-center gap-1"
+                >
+                  <span>🔗 Kalıbı Genişlet:</span> <span className="underline italic">"{expandedPhrase}"</span>
+                </button>
+              )}
               <span className="text-xs text-slate-300 font-mono">"{selectionText}"</span>
             </div>
           )}
@@ -1909,6 +2163,18 @@
             />
           )}
 
+          {/* Çıkmış Sınav / Deneme Yükleme Modalı */}
+          {isUploadExamOpen && (
+            <UploadExamModal
+              onClose={() => setIsUploadExamOpen(false)}
+              onSave={(newExam) => {
+                setCustomExams([newExam, ...customExams]);
+                setIsUploadExamOpen(false);
+                showToast(`"${newExam.title}" başarıyla eklendi (${newExam.questions.length} soru ayrıştırıldı).`);
+              }}
+            />
+          )}
+
           {/* Yeni Hafta Modalı */}
           {isNewWeekOpen && (
             <WeekAddModal
@@ -1929,14 +2195,16 @@
       const [queue] = useState(() => cards);
       const [idx, setIdx] = useState(0);
       const [revealed, setRevealed] = useState(false);
-      const [drag, setDrag] = useState(0);
+      const [dragX, setDragX] = useState(0);
+      const [dragY, setDragY] = useState(0);
       const touch = useRef(null);
       const card = queue[idx];
 
       const handleRating = (rating) => {
         if (!card) return;
+        triggerHaptic(35);
         onRate(card.id, rating);
-        setRevealed(false); setDrag(0);
+        setRevealed(false); setDragX(0); setDragY(0);
         if (idx + 1 < queue.length) setIdx(idx + 1);
         else onComplete();
       };
@@ -1952,31 +2220,69 @@
         return () => window.removeEventListener('keydown', onKey);
       });
 
-      // Dokunmatik: dokun = göster; anlam açıkken sağa kaydır = İyi, sola = Tekrar
-      const onTouchStart = (e) => { touch.current = e.touches[0].clientX; };
-      const onTouchMove = (e) => { if (touch.current != null && revealed) setDrag(e.touches[0].clientX - touch.current); };
+      // Dokunmatik ve Kaydırma Jestleri (Mobile Swipe Gestures)
+      const onTouchStart = (e) => {
+        touch.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      };
+      const onTouchMove = (e) => {
+        if (touch.current != null) {
+          const dx = e.touches[0].clientX - touch.current.x;
+          const dy = e.touches[0].clientY - touch.current.y;
+          setDragX(dx);
+          setDragY(dy);
+        }
+      };
       const onTouchEnd = () => {
-        if (revealed && Math.abs(drag) > 90) handleRating(drag > 0 ? 3 : 1);
-        else setDrag(0);
+        if (!revealed) {
+          // Kart kapalıyken hafifçe yukarı kaydırılırsa veya dokunulursa aç
+          if (dragY < -40 || Math.abs(dragX) > 40) setRevealed(true);
+        } else {
+          // Anlam açıkken: Sağa = İyi (3), Sola = Tekrar (1), Yukarı = Zor (2)
+          if (dragX > 70) {
+            handleRating(3);
+          } else if (dragX < -70) {
+            handleRating(1);
+          } else if (dragY < -60 && Math.abs(dragY) > Math.abs(dragX)) {
+            handleRating(2);
+          }
+        }
+        setDragX(0);
+        setDragY(0);
         touch.current = null;
       };
 
       if (!card) return null;
       const preview = [1, 2, 3, 4].map(g => fsrsNext(card.srs, g).interval);
-      const swipeHint = drag > 40 ? 'İyi →' : drag < -40 ? '← Tekrar' : '';
+      const isUp = dragY < -40 && Math.abs(dragY) > Math.abs(dragX);
+      const swipeHint = dragX > 40 ? 'İyi →' : dragX < -40 ? '← Tekrar' : isUp ? '↑ Zor' : '';
+      const borderCls = dragX > 40 ? 'border-emerald-500 shadow-emerald-950/50' : dragX < -40 ? 'border-red-500 shadow-red-950/50' : isUp ? 'border-amber-500 shadow-amber-950/50' : 'border-slate-800';
 
       return (
         <div
           onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-          style={{ transform: drag ? 'translateX(' + drag + 'px) rotate(' + (drag / 30) + 'deg)' : undefined, transition: drag ? 'none' : 'transform .2s' }}
-          className={"bg-slate-950 p-6 sm:p-8 rounded-3xl border shadow-2xl text-center space-y-6 " + (drag > 40 ? 'border-emerald-600' : drag < -40 ? 'border-red-600' : 'border-slate-800')}>
+          style={{
+            transform: (dragX || (isUp && dragY)) ? `translate(${dragX}px, ${isUp ? dragY : 0}px) rotate(${dragX / 30}deg)` : undefined,
+            transition: (dragX || dragY) ? 'none' : 'transform .2s ease-out'
+          }}
+          className={"bg-slate-950 p-6 sm:p-8 rounded-3xl border shadow-2xl text-center space-y-6 " + borderCls}>
           <div className="flex items-center justify-between text-xs text-slate-400 font-bold">
             <span>Kart {idx + 1} / {queue.length}</span>
             {goal > 0 && <span className={doneToday >= goal ? 'text-emerald-400' : ''}>🎯 Bugün {doneToday}/{goal}</span>}
           </div>
-          {swipeHint && <div className={"text-sm font-black " + (drag > 0 ? 'text-emerald-400' : 'text-red-400')}>{swipeHint}</div>}
+          {swipeHint && (
+            <div className={"text-base font-black animate-pulse " + (dragX > 0 ? 'text-emerald-400' : dragX < 0 ? 'text-red-400' : 'text-amber-400')}>
+              {swipeHint}
+            </div>
+          )}
           <div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{card.partOfSpeech}</span>
+            <div className="flex items-center justify-center gap-1.5">
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{card.partOfSpeech}</span>
+              {card.questionType && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800 text-indigo-300">
+                  {card.questionType.split(' ')[0]}
+                </span>
+              )}
+            </div>
             <h2 className="text-3xl font-black text-white mt-2">{card.english}</h2>
             {card.ipa && <p className="text-xs text-slate-400 font-mono mt-1">/{card.ipa}/</p>}
             {card.okunus && <p className="text-xs text-amber-300 mt-0.5">[{card.okunus}]</p>}
@@ -2003,13 +2309,18 @@
                   </button>
                 ))}
               </div>
-              <p className="text-[10px] text-slate-600">Klavye: 1-4 · Telefonda sağa kaydır = İyi, sola = Tekrar</p>
+              <p className="text-[10px] text-slate-400 mt-2">
+                📱 Telefonda: <b>Sağa</b> = İyi, <b>Sola</b> = Tekrar, <b>Yukarı</b> = Zor · ⌨ Klavye: 1-4
+              </p>
             </div>
           ) : (
             <button onClick={() => setRevealed(true)} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-lg">
-              Anlamını Göster <span className="opacity-60 font-normal">(boşluk)</span>
+              Anlamını Göster <span className="opacity-60 font-normal">(boşluk veya yukarı kaydır)</span>
             </button>
           )}
+        </div>
+      );
+    }
         </div>
       );
     }
@@ -2379,24 +2690,344 @@
       }).filter(Boolean);
     }
 
-    function ExamSection({ cards, readings, onMarkDifficult, onAnswer }) {
+    // YÖKDİL Paraphrasing / Eş Anlamlı Soru Üretici
+    function genSynonymQuestions(cards, n) {
+      const usable = cards.filter(c => c.synonyms && c.synonyms.length > 0);
+      if (usable.length < 2) return [];
+      return pickN(usable, n).map(c => {
+        const correct = c.synonyms[0];
+        const otherCards = cards.filter(x => x.id !== c.id);
+        const otherWords = [
+          ...otherCards.flatMap(x => x.synonyms || []),
+          ...otherCards.map(x => x.lemma || x.english)
+        ].filter(w => w && w.toLowerCase() !== correct.toLowerCase() && !c.synonyms.map(s => s.toLowerCase()).includes(w.toLowerCase()));
+        const uniqueOthers = [...new Set(otherWords)];
+        if (uniqueOthers.length < 4) return null;
+        const distractors = pickN(uniqueOthers, 4);
+        return makeQ(
+          'Eş Anlamlı (Synonym)',
+          '"' + (c.lemma || c.english) + '" kelimesinin en yakın eş anlamlısı (synonym) hangisidir?',
+          [correct, ...distractors],
+          correct,
+          '"' + (c.lemma || c.english) + '" kelimesinin eş anlamlıları: ' + c.synonyms.join(', ') + '. Türkçe anlamı: ' + c.turkish,
+          { cardIds: [c.id] }
+        );
+      }).filter(Boolean);
+    }
+
+    // --- EDAT EŞLEŞTİRME OYUNU (Preposition Wheel) ---
+    // YÖKDİL'in kelime sorularında sık çıkan edatlı kalıplar. Birden fazla edatla doğru olabilenler (result in/from,
+    // involved in/with, concerned with/about…) belirsiz oldukları için listeye alınmadı.
+    const PREP_OPTIONS = ['to', 'of', 'from', 'in', 'on', 'with', 'for', 'at'];
+    const PREP_PAIRS = [
+      ['attribute', 'to', '-e bağlamak, -e atfetmek'], ['prone', 'to', '-e yatkın'], ['susceptible', 'to', '-e karşı savunmasız'], ['contribute', 'to', '-e katkıda bulunmak'],
+      ['adhere', 'to', '-e bağlı kalmak, uymak'], ['resort', 'to', '-e başvurmak'], ['succumb', 'to', '-e yenik düşmek'], ['object', 'to', '-e itiraz etmek'],
+      ['consent', 'to', '-e razı olmak'], ['equivalent', 'to', '-e eşdeğer'], ['similar', 'to', '-e benzer'], ['exposed', 'to', '-e maruz kalmış'],
+      ['subject', 'to', '-e tabi'], ['confined', 'to', '-e sınırlı'], ['adapt', 'to', '-e uyum sağlamak'], ['respond', 'to', '-e yanıt vermek'],
+      ['refer', 'to', '-e değinmek, atıfta bulunmak'], ['access', 'to', '-e erişim'], ['threat', 'to', '-e tehdit'], ['solution', 'to', '-e çözüm'],
+      ['approach', 'to', '-e yaklaşım'], ['contribution', 'to', '-e katkı'], ['alternative', 'to', '-e alternatif'], ['vulnerable', 'to', '-e karşı savunmasız'],
+      ['immune', 'to', '-e karşı bağışık'], ['detrimental', 'to', '-e zararlı'], ['conducive', 'to', '-e elverişli'], ['akin', 'to', '-e benzer'],
+      ['stem', 'from', '-den kaynaklanmak'], ['derive', 'from', '-den türemek, elde etmek'], ['refrain', 'from', '-den kaçınmak'], ['abstain', 'from', '-den uzak durmak'],
+      ['differ', 'from', '-den farklı olmak'], ['benefit', 'from', '-den yararlanmak'], ['suffer', 'from', '-den muzdarip olmak'], ['emerge', 'from', '-den ortaya çıkmak'],
+      ['recover', 'from', '-den iyileşmek'], ['prevent', 'from', '-den alıkoymak'], ['exempt', 'from', '-den muaf'], ['distinguish', 'from', '-den ayırt etmek'],
+      ['originate', 'from', '-den kaynaklanmak'], ['deviate', 'from', '-den sapmak'], ['withdraw', 'from', '-den çekilmek'],
+      ['deprive', 'of', '-den yoksun bırakmak'], ['consist', 'of', '-den oluşmak'], ['dispose', 'of', '-den kurtulmak, elden çıkarmak'], ['accuse', 'of', '-le suçlamak'],
+      ['approve', 'of', '-i onaylamak'], ['devoid', 'of', '-den yoksun'], ['indicative', 'of', '-in göstergesi'], ['characteristic', 'of', '-e özgü'],
+      ['tolerant', 'of', '-e hoşgörülü'], ['conscious', 'of', '-in bilincinde'], ['aware', 'of', '-in farkında'], ['capable', 'of', '-e muktedir'],
+      ['independent', 'of', '-den bağımsız'], ['regardless', 'of', '-e bakılmaksızın'], ['lack', 'of', '-in eksikliği'], ['representative', 'of', '-i temsil eden'],
+      ['comprised', 'of', '-den oluşan'], ['reminiscent', 'of', '-i hatırlatan'], ['wary', 'of', '-e karşı temkinli'],
+      ['invest', 'in', '-e yatırım yapmak'], ['participate', 'in', '-e katılmak'], ['specialize', 'in', '-de uzmanlaşmak'], ['persist', 'in', '-de ısrar etmek'],
+      ['succeed', 'in', '-de başarılı olmak'], ['interested', 'in', '-e ilgili'], ['rich', 'in', '-ce zengin'], ['engage', 'in', '-e girişmek, -le uğraşmak'],
+      ['belief', 'in', '-e inanç'], ['increase', 'in', '-de artış'], ['decline', 'in', '-de düşüş'], ['instrumental', 'in', '-de etkili, önemli rol oynayan'],
+      ['implicated', 'in', '-e karışmış'], ['inherent', 'in', '-in doğasında olan'],
+      ['rely', 'on', '-e güvenmek, dayanmak'], ['depend', 'on', '-e bağlı olmak'], ['insist', 'on', '-de ısrar etmek'], ['focus', 'on', '-e odaklanmak'],
+      ['comment', 'on', '-e yorum yapmak'], ['emphasis', 'on', '-e vurgu'], ['impact', 'on', '-e etki'], ['reliance', 'on', '-e bağımlılık'],
+      ['based', 'on', '-e dayalı'], ['dependent', 'on', '-e bağımlı'], ['embark', 'on', '-e başlamak, girişmek'], ['capitalize', 'on', '-den yararlanmak, fırsata çevirmek'],
+      ['comply', 'with', '-e uymak'], ['cope', 'with', '-le başa çıkmak'], ['coincide', 'with', '-le çakışmak, aynı zamana denk gelmek'], ['interfere', 'with', '-e engel olmak, karışmak'],
+      ['consistent', 'with', '-le tutarlı'], ['compatible', 'with', '-le uyumlu'], ['associated', 'with', '-le ilişkili'], ['equipped', 'with', '-le donatılmış'],
+      ['preoccupied', 'with', '-le meşgul, kafayı takmış'], ['interact', 'with', '-le etkileşimde bulunmak'], ['collaborate', 'with', '-le iş birliği yapmak'], ['correlate', 'with', '-le ilişkili olmak'],
+      ['deal', 'with', '-le ilgilenmek, ele almak'], ['faced', 'with', '-le karşı karşıya'], ['fraught', 'with', '-le dolu'], ['grapple', 'with', '-le boğuşmak'],
+      ['account', 'for', '-i açıklamak; oluşturmak'], ['compensate', 'for', '-i telafi etmek'], ['substitute', 'for', '-in yerine geçmek'], ['responsible', 'for', '-den sorumlu'],
+      ['demand', 'for', '-e talep'], ['need', 'for', '-e ihtiyaç'], ['reason', 'for', '-in sebebi'], ['preference', 'for', '-i tercih'],
+      ['eligible', 'for', '-e uygun, hak sahibi'], ['notorious', 'for', '-le kötü şöhretli'], ['renowned', 'for', '-le ünlü'], ['strive', 'for', '-için çabalamak'],
+      ['marvel', 'at', '-e hayret etmek'], ['adept', 'at', '-de usta'], ['glance', 'at', '-e göz atmak'],
+    ].map(([w, p, tr]) => ({ w, p, tr }));
+
+    function PrepositionGame({ readings, onAnswer, best, onBest }) {
+      const [state, setState] = useState('idle');      // idle | playing | done
+      const [tab, setTab] = useState('game');          // game | matrix
+      const [selectedPrep, setSelectedPrep] = useState('to');
+      const [left, setLeft] = useState(60);
+      const [item, setItem] = useState(null);
+      const [score, setScore] = useState(0);
+      const [answered, setAnswered] = useState(0);
+      const [combo, setCombo] = useState(0);
+      const [wrong, setWrong] = useState([]);
+      const [flash, setFlash] = useState(null);           // 'ok' | 'bad'
+      const deck = useRef([]);
+
+      // Kalıp sizin metinlerinizde geçiyorsa cümlesiyle sor
+      const contexts = useRef(null);
+      const findContext = (it) => {
+        if (!contexts.current) contexts.current = readings.flatMap(r => splitSentences(plainText(r.content)));
+        const re = new RegExp('\\b(' + escRe(it.w) + '[a-z]{0,3})\\s+' + it.p + '\\b', 'i');
+        const s = contexts.current.find(x => re.test(x));
+        if (!s) return null;
+        const m = s.match(re);
+        return { before: s.slice(0, m.index + m[1].length), after: s.slice(m.index + m[0].length) };
+      };
+      const next = () => {
+        if (!deck.current.length) deck.current = shuffleArr(PREP_PAIRS);
+        const it = deck.current.pop();
+        setItem({ ...it, ctx: findContext(it) });
+      };
+      const start = () => { setScore(0); setAnswered(0); setCombo(0); setWrong([]); setLeft(60); deck.current = shuffleArr(PREP_PAIRS); setState('playing'); next(); };
+
+      useEffect(() => {
+        if (state !== 'playing') return;
+        if (left <= 0) { setState('done'); if (score > (best || 0)) onBest(score); return; }
+        const t = setTimeout(() => setLeft(l => l - 1), 1000);
+        return () => clearTimeout(t);
+      }, [state, left]);
+
+      const pick = (p) => {
+        if (state !== 'playing' || !item) return;
+        const ok = p === item.p;
+        setAnswered(a => a + 1);
+        if (ok) { setScore(s => s + 1); setCombo(c => c + 1); }
+        else { setCombo(0); setWrong(w => [...w, { ...item, picked: p }]); }
+        onAnswer(ok);
+        setFlash(ok ? 'ok' : 'bad');
+        setTimeout(() => setFlash(null), 250);
+        next();
+      };
+
+      // Klavye kısayolu: 1-8
+      useEffect(() => {
+        const onKey = (e) => { if (state === 'playing' && /^[1-8]$/.test(e.key)) pick(PREP_OPTIONS[+e.key - 1]); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      });
+
+      if (state === 'idle' || state === 'done') {
+        const prepItems = PREP_PAIRS.filter(x => x.p === selectedPrep);
+        return (
+          <div className="max-w-2xl mx-auto bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <h3 className="font-bold text-lg text-white">🎯 YÖKDİL Preposition Matrix & Çarkı</h3>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => setTab('game')}
+                  className={"px-3 py-1 rounded-lg text-xs font-bold transition " + (tab === 'game' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}
+                >
+                  ⚡ Hızlı Çark (60 sn)
+                </button>
+                <button
+                  onClick={() => setTab('matrix')}
+                  className={"px-3 py-1 rounded-lg text-xs font-bold transition " + (tab === 'matrix' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}
+                >
+                  📊 Preposition Matrix
+                </button>
+              </div>
+            </div>
+
+            {tab === 'matrix' ? (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400">YÖKDİL sınavında en çok sorulan sabit edatlı yapıları kategori bazında inceleyin ve pekiştirin:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {PREP_OPTIONS.map(p => (
+                    <button
+                      key={p}
+                      onClick={() => setSelectedPrep(p)}
+                      className={"px-3 py-1.5 rounded-lg text-xs font-bold transition " + (selectedPrep === p ? 'bg-indigo-600 text-white shadow' : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800')}
+                    >
+                      {p} ({PREP_PAIRS.filter(x => x.p === p).length})
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
+                  {prepItems.map((it, i) => (
+                    <div key={i} className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-sm font-black text-white">{it.w} <span className="text-indigo-400 font-bold">{it.p}</span></span>
+                        <p className="text-[11px] text-slate-400 mt-0.5">{it.tr}</p>
+                      </div>
+                      <button onClick={() => playWord({ english: it.w + ' ' + it.p })} className="text-xs text-blue-400 hover:text-blue-300 px-1.5 py-1 rounded bg-slate-800">🔊</button>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => { setTab('game'); start(); }} className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500">
+                  Şimdi Çarkı Başlat (Pratik Yap) →
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400">YÖKDİL kelime sorularının önemli kısmı edatlı kalıplardan gelir (attribute <b>to</b>, stem <b>from</b>, deprive <b>of</b>…). Kalıbı gör, doğru edatı olabildiğince hızlı seç. Kalıp metinlerinizde geçiyorsa orijinal cümleyle sorulur.</p>
+                {state === 'done' && (
+                  <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-2">
+                    <p className="text-2xl font-black text-white">{score} doğru <span className="text-sm text-slate-400">/ {answered} cevap · en iyi: {Math.max(best || 0, score)}</span></p>
+                    {wrong.length > 0 && (
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        <p className="text-[11px] text-slate-500">Yanlışlarınız:</p>
+                        {wrong.map((x, i) => <p key={i} className="text-xs text-slate-300"><b className="text-white">{x.w} <span className="text-emerald-400">{x.p}</span></b> = {x.tr} <span className="text-red-400 line-through ml-1">{x.picked}</span></p>)}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <button onClick={start} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">{state === 'done' ? 'Tekrar oyna' : 'Başla'}</button>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className={"font-black text-lg " + (left <= 10 ? 'text-red-400' : 'text-white')}>⏱ {left}</span>
+            <span className="text-slate-300">Doğru: <b className="text-emerald-400">{score}</b> {combo >= 3 && <span className="text-orange-400 font-bold ml-1">🔥 x{combo}</span>}</span>
+          </div>
+          <div className="h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500 transition-all" style={{ width: (left / 60 * 100) + '%' }} /></div>
+          <div className={"p-6 rounded-2xl border text-center transition-colors " + (flash === 'ok' ? 'border-emerald-500 bg-emerald-950/30' : flash === 'bad' ? 'border-red-500 bg-red-950/30' : 'border-slate-800 bg-slate-950')}>
+            {item && (item.ctx ? (
+              <p className="text-base text-slate-100 font-serif leading-relaxed">{item.ctx.before} <span className="inline-block min-w-[3rem] border-b-2 border-blue-400 text-blue-300">&nbsp;?&nbsp;</span> {item.ctx.after}</p>
+            ) : (
+              <p className="text-3xl font-black text-white">{item.w} <span className="inline-block min-w-[3.5rem] border-b-4 border-blue-400 text-blue-300">?</span></p>
+            ))}
+            {item && item.ctx && <p className="text-[10px] text-slate-500 mt-2">Kalıp: <b className="text-slate-300">{item.w} ___</b> · sizin metninizden</p>}
+          </div>
+          <div className="grid grid-cols-4 gap-2">
+            {PREP_OPTIONS.map((p, i) => (
+              <button key={p} onClick={() => pick(p)} className="py-3 rounded-xl bg-slate-800 hover:bg-blue-600 text-white font-bold text-sm">
+                {p}<span className="block text-[9px] font-normal text-slate-400">{i + 1}</span>
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setLeft(0)} className="text-xs text-slate-500 hover:text-slate-300">Bitir</button>
+        </div>
+      );
+    }
+
+    // Soru metnindeki bağlam ipuçlarını (bağlaç / geçiş ifadeleri) vurgula ve açıklamasını üret
+    const CLUE_WORDS = (() => {
+      const m = new Map();
+      LINKER_LIST.forEach(L => m.set(L.w, L.cat));
+      [['while', 'zıtlık'], ['but', 'zıtlık'], ['yet', 'zıtlık'], ['unlike', 'zıtlık'], ['rather than', 'zıtlık'], ['instead of', 'zıtlık'], ['so', 'sebep-sonuç'], ['thereby', 'sebep-sonuç'], ['accordingly', 'sebep-sonuç'], ['as well as', 'ekleme'], ['also', 'ekleme']].forEach(([w, c]) => { if (!m.has(w)) m.set(w, c); });
+      return [...m.entries()].sort((a, b) => b[0].length - a[0].length);
+    })();
+    const CLUE_HINT = {
+      'zıtlık': 'zıtlık bildirir → boşluğa gelen kelime, cümlenin öbür yarısıyla ZIT anlamlı olmalı',
+      'sebep-sonuç': 'sebep-sonuç bildirir → boşluk, öbür yarının SONUCU ya da SEBEBİ olacak anlamda olmalı',
+      'ekleme': 'ekleme bildirir → boşluk, önceki fikirle AYNI yönde olmalı',
+      'benzerlik': 'benzerlik bildirir → boşluk, önceki fikre BENZER olmalı',
+      'örnekleme': 'örnek verir → boşluk, verilen örnekleri KAPSAYAN genel bir kavram olmalı',
+      'koşul': 'koşul bildirir → boşluk, koşul gerçekleşince/gerçekleşmeyince olacak durumu anlatır',
+      'amaç': 'amaç bildirir → boşluk, ulaşılmak istenen hedefi anlatır',
+    };
+    function renderWithClues(text) {
+      const found = [];
+      const re = new RegExp('\\b(' + CLUE_WORDS.map(([w]) => escRe(w)).join('|') + ')\\b', 'gi');
+      const parts = []; let last = 0, m;
+      while ((m = re.exec(text))) {
+        parts.push(text.slice(last, m.index));
+        const w = m[0].toLowerCase(), cat = (CLUE_WORDS.find(([x]) => x === w) || [])[1];
+        if (cat && !found.some(f => f.w === w)) found.push({ w, cat });
+        parts.push(<b key={m.index} className="text-orange-300 bg-orange-500/10 rounded px-0.5">{m[0]}</b>);
+        last = m.index + m[0].length;
+      }
+      parts.push(text.slice(last));
+      return { nodes: parts, clues: found };
+    }
+
+    function ExamSection({ cards, readings, customExams = [], onOpenUploadExam, onDeleteExam, onExtractVocabFromExam, onMarkDifficult, onAnswer, prepBest, onPrepBest, preset, onPresetUsed, onCheckupDone }) {
+      const [examTab, setExamTab] = useState('generator'); // 'generator' | 'uploaded'
       const [mode, setMode] = useState('mixed');
       const [count, setCount] = useState(10);
       const [qs, setQs] = useState(null);
       const [idx, setIdx] = useState(0);
       const [picked, setPicked] = useState({});          // soru index → seçilen şık
       const [marked, setMarked] = useState(false);
+      const [prepOpen, setPrepOpen] = useState(false);
+      const [timed, setTimed] = useState(null);           // { endAt, total } süreli haftalık check-up
+      const [now, setNow] = useState(Date.now());
+      const reported = useRef(false);
 
-      const build = () => {
-        const per = mode === 'mixed' ? Math.ceil(count / 4) : count;
+      const build = (opts) => {
+        const m = (opts && opts.mode) || mode, n = (opts && opts.count) || count;
+        if (m === 'prep') { setPrepOpen(true); return; }
+        const per = m === 'mixed' ? Math.ceil(n / 4) + 1 : n;
         let list = [];
-        if (mode === 'mixed' || mode === 'vocab') list = list.concat(genVocabQuestions(cards, per));
-        if (mode === 'mixed' || mode === 'linker') list = list.concat(genLinkerQuestions(readings, per));
-        if (mode === 'mixed' || mode === 'irrelevant') list = list.concat(genIrrelevantQuestions(readings, mode === 'mixed' ? Math.max(1, Math.floor(per / 2)) : per));
-        if (mode === 'mixed' || mode === 'meaning') list = list.concat(genMeaningQuestions(cards, per));
-        list = mode === 'mixed' ? shuffleArr(list).slice(0, count) : list.slice(0, count);
-        setQs(list); setIdx(0); setPicked({}); setMarked(false);
+        if (m === 'mixed' || m === 'vocab') list = list.concat(genVocabQuestions(cards, per));
+        if (m === 'mixed' || m === 'linker') list = list.concat(genLinkerQuestions(readings, per));
+        if (m === 'mixed' || m === 'irrelevant') list = list.concat(genIrrelevantQuestions(readings, m === 'mixed' ? Math.max(1, Math.floor(per / 2)) : per));
+        if (m === 'mixed' || m === 'meaning') list = list.concat(genMeaningQuestions(cards, per));
+        if (m === 'mixed' || m === 'synonym') list = list.concat(genSynonymQuestions(cards, per));
+        list = m === 'mixed' ? shuffleArr(list).slice(0, n) : list.slice(0, n);
+        setQs(list); setIdx(0); setPicked({}); setMarked(false); reported.current = false;
+        setTimed(opts && opts.seconds && list.length ? { endAt: Date.now() + opts.seconds * 1000, total: opts.seconds } : null);
       };
+
+      const startCustomExam = (ex, filter = 'all') => {
+        let qsList = ex.questions || [];
+        if (filter === 'vocab') qsList = ex.questions.filter(q => q.num <= 6 || q.category.includes('Kelime'));
+        else if (filter === 'grammar') qsList = ex.questions.filter(q => (q.num >= 7 && q.num <= 16) || q.category.includes('Gramer'));
+        else if (filter === 'cloze') qsList = ex.questions.filter(q => (q.num >= 17 && q.num <= 26) || q.category.includes('Cloze'));
+        else if (filter === 'sentence') qsList = ex.questions.filter(q => (q.num >= 27 && q.num <= 36) || q.category.includes('Cümle Tamamlama'));
+        else if (filter === 'translation') qsList = ex.questions.filter(q => (q.num >= 37 && q.num <= 48) || q.category.includes('Çeviri'));
+        else if (filter === 'paragraph') qsList = ex.questions.filter(q => q.num >= 49 || q.category.includes('Paragraf'));
+
+        if (!qsList.length) {
+          alert('Bu kategoride soru bulunamadı.');
+          return;
+        }
+
+        const formatted = qsList.map(q => ({
+          type: q.category,
+          prompt: `[${ex.title} • Soru ${q.num}]\n\n${q.prompt}`,
+          options: q.options,
+          answer: q.answer >= 0 ? q.answer : 0,
+          hasAnswer: q.answer >= 0,
+          explain: q.answer >= 0 ? `Doğru Cevap: ${LETTERS[q.answer]}` : 'Bu sorunun cevap anahtarı belirtilmemiş.',
+          cardIds: []
+        }));
+
+        setQs(formatted);
+        setIdx(0);
+        setPicked({});
+        setMarked(false);
+        reported.current = false;
+        const totalSec = filter === 'all' ? 180 * 60 : qsList.length * 90;
+        setTimed({ endAt: Date.now() + totalSec * 1000, total: totalSec });
+      };
+
+      // Haftalık check-up dışarıdan (İstatistikler) başlatılabilir
+      useEffect(() => {
+        if (preset && preset.weekly) { setPrepOpen(false); build({ mode: 'mixed', count: 20, seconds: 15 * 60 }); onPresetUsed && onPresetUsed(); }
+      }, [preset]);
+
+      // Süre sayacı; süre bitince cevaplanmayanlar boş sayılır
+      useEffect(() => {
+        if (!timed || !qs) return;
+        const t = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(t);
+      }, [timed, qs]);
+      const remaining = timed ? Math.max(0, Math.round((timed.endAt - now) / 1000)) : null;
+      useEffect(() => {
+        if (timed && qs && remaining === 0 && idx < qs.length) {
+          const filled = { ...picked };
+          qs.forEach((_, i) => { if (filled[i] === undefined) filled[i] = -1; });
+          setPicked(filled); setIdx(qs.length);
+        }
+      }, [remaining]);
+
+      if (prepOpen) {
+        return (
+          <div className="space-y-3">
+            <button onClick={() => setPrepOpen(false)} className="text-xs text-slate-400 hover:text-blue-400 font-bold">← Sınav türleri</button>
+            <PrepositionGame readings={readings} best={prepBest} onBest={onPrepBest} onAnswer={(ok) => onAnswer && onAnswer('Edat', ok)} />
+          </div>
+        );
+      }
 
       const needs = [];
       if (cards.length < 5) needs.push('en az 5 kelime kartı (şu an ' + cards.length + ')');
@@ -2405,25 +3036,160 @@
       if (!qs) {
         return (
           <div className="max-w-2xl mx-auto space-y-4">
-            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
-              <h3 className="font-bold text-lg text-white">🎓 YÖKDİL Tarzı Deneme</h3>
-              <p className="text-xs text-slate-400">Sorular sizin okuma metinlerinizden ve kelime kartlarınızdan otomatik üretilir. Her soruda 5 şık vardır; cevabınızdan sonra açıklama gösterilir.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                {[['mixed', 'Karışık (önerilen)'], ['vocab', 'Kelime – boşluk doldurma'], ['linker', 'Bağlaç / geçiş ifadeleri'], ['irrelevant', 'Anlamı bozan cümle'], ['meaning', 'Türkçe karşılık']].map(([k, label]) => (
-                  <label key={k} className={"flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer " + (mode === k ? 'border-blue-600 bg-blue-600/10 text-white' : 'border-slate-800 text-slate-300')}>
-                    <input type="radio" name="examMode" checked={mode === k} onChange={() => setMode(k)} className="accent-blue-500" /> {label}
-                  </label>
-                ))}
+            {/* Üst Sekmeler ve PDF Yükleme Butonu */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExamTab('generator')}
+                  className={"px-3.5 py-1.5 rounded-xl text-xs font-bold transition " + (examTab === 'generator' ? 'bg-blue-600 text-white shadow' : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800')}
+                >
+                  🤖 Özgün Soru Üretici
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExamTab('uploaded')}
+                  className={"px-3.5 py-1.5 rounded-xl text-xs font-bold transition " + (examTab === 'uploaded' ? 'bg-blue-600 text-white shadow' : 'bg-slate-900 border border-slate-800 text-slate-300 hover:bg-slate-800')}
+                >
+                  📄 Çıkmış Sınavlarım & Denemeler ({customExams.length})
+                </button>
               </div>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-slate-400">Soru sayısı</span>
-                {[10, 20, 40].map(n => (
-                  <button key={n} onClick={() => setCount(n)} className={"px-3 py-1.5 rounded-lg font-bold " + (count === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{n}</button>
-                ))}
-              </div>
-              {needs.length > 0 && <p className="text-[11px] text-amber-400">Daha çok soru için: {needs.join(', ')}. Bağlaç ve anlamı bozan cümle soruları okuma metinlerinden üretilir (ikincisi için en az 2 metin gerekir).</p>}
-              <button onClick={build} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">Sınavı Başlat</button>
+              <button
+                type="button"
+                onClick={onOpenUploadExam}
+                className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white shadow transition flex items-center gap-1.5"
+              >
+                <span>+ Çıkmış Sınav / Deneme PDF'i Yükle</span>
+              </button>
             </div>
+
+            {examTab === 'uploaded' ? (
+              customExams.length === 0 ? (
+                <div className="bg-slate-950 p-8 rounded-2xl border border-dashed border-slate-800 text-center space-y-3">
+                  <div className="text-3xl">📄</div>
+                  <h4 className="font-bold text-base text-white">Henüz Bir Sınav PDF'i Yüklemediniz</h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    Geçmiş yılların YÖKDİL kitapçıklarını (PDF veya Word) yükleyin. Sistem soruları, şıkları ve YÖKDİL soru tiplerini otomatik olarak ayrıştırarak sınav simülasyonu hazırlar.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onOpenUploadExam}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow"
+                  >
+                    + İlk Sınav PDF'inizi Yükleyin
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {customExams.map(ex => {
+                    const qCount = ex.questions.length;
+                    const vocabCount = ex.questions.filter(q => q.num <= 6 || q.category.includes('Kelime')).length;
+                    return (
+                      <div key={ex.id} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 hover:border-slate-700 transition">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-950 border border-indigo-800 text-indigo-300">
+                                {ex.field} • {ex.year} {ex.term}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {qCount} soru
+                              </span>
+                            </div>
+                            <h4 className="font-black text-base text-white mt-1">{ex.title}</h4>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            {vocabCount > 0 && onExtractVocabFromExam && (
+                              <button
+                                type="button"
+                                onClick={() => onExtractVocabFromExam(ex)}
+                                className="px-2.5 py-1.5 rounded-lg bg-emerald-950/70 border border-emerald-800 text-emerald-300 hover:bg-emerald-900 text-xs font-bold transition flex items-center gap-1"
+                                title="Sınavdaki hedef kelimeleri kelime bankanıza aktarır"
+                              >
+                                ✨ Kelimeleri Bankaya Ekle
+                              </button>
+                            )}
+                            {onDeleteExam && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteExam(ex.id)}
+                                className="px-2.5 py-1.5 rounded-lg bg-red-950/50 border border-red-900/50 text-red-400 hover:bg-red-900 text-xs transition"
+                                title="Sınavı Sil"
+                              >
+                                🗑
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Hızlı Başlatma Butonları */}
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => startCustomExam(ex, 'all')}
+                            className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow"
+                          >
+                            ▶ Tüm Sınavı Çöz ({qCount} Soru · 180 dk)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startCustomExam(ex, 'vocab')}
+                            disabled={vocabCount === 0}
+                            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-bold text-slate-200 disabled:opacity-40"
+                          >
+                            Soru 1-6 (Kelime)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startCustomExam(ex, 'grammar')}
+                            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-bold text-slate-200"
+                          >
+                            Soru 7-16 (Gramer & Edat)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startCustomExam(ex, 'cloze')}
+                            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-bold text-slate-200"
+                          >
+                            Soru 17-26 (Cloze Test)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startCustomExam(ex, 'sentence')}
+                            className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-bold text-slate-200"
+                          >
+                            Soru 27-36 (Cümle Tamamlama)
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : (
+              <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+                <h3 className="font-bold text-lg text-white">🎓 YÖKDİL Tarzı Özgün Soru Üretici</h3>
+                <p className="text-xs text-slate-400">Sorular sizin okuma metinlerinizden ve kelime kartlarınızdan otomatik üretilir. Her soruda 5 şık vardır; cevabınızdan sonra açıklama gösterilir.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  {[['mixed', 'Karışık (önerilen)'], ['vocab', 'Kelime – boşluk doldurma'], ['synonym', '🎯 Eş Anlamlılar (Synonyms)'], ['linker', 'Bağlaç / geçiş ifadeleri'], ['irrelevant', 'Anlamı bozan cümle'], ['meaning', 'Türkçe karşılık'], ['prep', '🎯 Preposition Matrix & Çark']].map(([k, label]) => (
+                    <label key={k} className={"flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer " + (mode === k ? 'border-blue-600 bg-blue-600/10 text-white' : 'border-slate-800 text-slate-300')}>
+                      <input type="radio" name="examMode" checked={mode === k} onChange={() => setMode(k)} className="accent-blue-500" /> {label}
+                    </label>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400">Soru sayısı</span>
+                  {[10, 20, 40].map(n => (
+                    <button key={n} onClick={() => setCount(n)} className={"px-3 py-1.5 rounded-lg font-bold " + (count === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{n}</button>
+                  ))}
+                </div>
+                {needs.length > 0 && mode !== 'prep' && <p className="text-[11px] text-amber-400">Daha çok soru için: {needs.join(', ')}. Bağlaç ve anlamı bozan cümle soruları okuma metinlerinden üretilir (ikincisi için en az 2 metin gerekir).</p>}
+                <button onClick={() => build()} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">{mode === 'prep' ? 'Oyunu Aç' : 'Sınavı Başlat'}</button>
+                <button onClick={() => build({ mode: 'mixed', count: 20, seconds: 15 * 60 })} className="w-full py-2.5 rounded-xl bg-indigo-700 text-white font-bold text-xs hover:bg-indigo-600">
+                  ⏱ Haftalık Check-up: 20 soru · 15 dakika{new Date().getDay() === 0 ? ' — bugün check-up günü!' : ''}
+                </button>
+              </div>
+            )}
           </div>
         );
       }
@@ -2446,9 +3212,24 @@
         const wrongCardIds = [...new Set(qs.flatMap((q, i) => picked[i] !== q.answer ? (q.cardIds || []) : []))];
         const byType = {};
         qs.forEach((q, i) => { byType[q.type] = byType[q.type] || [0, 0]; byType[q.type][1]++; if (picked[i] === q.answer) byType[q.type][0]++; });
+        if (timed && !reported.current) { reported.current = true; setTimeout(() => onCheckupDone && onCheckupDone(correctN, qs.length), 0); }
+        const usedSec = timed ? Math.min(timed.total, timed.total - Math.max(0, Math.round((timed.endAt - Date.now()) / 1000))) : 0;
         return (
           <div className="max-w-2xl mx-auto bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+            {timed && <p className="text-xs font-bold text-indigo-300">⏱ Haftalık Check-up · süre: {Math.floor(usedSec / 60)} dk {usedSec % 60} sn{qs.some((_, i) => picked[i] === -1) ? ' · süre doldu, boş bırakılanlar yanlış sayıldı' : ''}</p>}
             <h3 className="font-bold text-lg text-white">Sonuç: {correctN} / {qs.length} <span className="text-slate-400 text-sm">(%{Math.round(correctN / qs.length * 100)})</span></h3>
+            {timed && (
+              <div className="space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+                {qs.map((q, i) => picked[i] === q.answer ? null : (
+                  <div key={i} className="p-3 rounded-xl bg-red-950/30 border border-red-900/50 text-xs space-y-1">
+                    <p className="text-slate-400">{i + 1}. {q.type}</p>
+                    <p className="text-slate-200 font-serif whitespace-pre-wrap line-clamp-4">{q.prompt}</p>
+                    <p className="text-emerald-300">Doğru: {LETTERS[q.answer]}) {q.options[q.answer]}{picked[i] >= 0 ? <span className="text-red-300 ml-2">Sizin: {LETTERS[picked[i]]}) {q.options[picked[i]]}</span> : <span className="text-slate-500 ml-2">(boş)</span>}</p>
+                    <p className="text-slate-400">{q.explain}</p>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="space-y-1 text-xs">
               {Object.entries(byType).map(([t, [c, n]]) => <p key={t} className="text-slate-300">{t}: <b className={c === n ? 'text-emerald-400' : 'text-amber-300'}>{c}/{n}</b></p>)}
             </div>
@@ -2458,31 +3239,45 @@
               </button>
             )}
             <div className="flex gap-2">
-              <button onClick={build} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Yeni sınav</button>
-              <button onClick={() => setQs(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-200">Ayarlar</button>
+              <button onClick={() => build(timed ? { mode: 'mixed', count: 20, seconds: 15 * 60 } : undefined)} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Yeni sınav</button>
+              <button onClick={() => { setQs(null); setTimed(null); }} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-200">Ayarlar</button>
             </div>
           </div>
         );
       }
 
       const q = qs[idx];
+      if (!q) return null;
       const my = picked[idx];
-      const isAnswered = my !== undefined;
+      const isAnswered = my !== undefined && !timed;      // süreli denemede geri bildirim sonda
+      const showClues = q.type === 'Kelime';
+      const rendered = showClues ? renderWithClues(q.prompt) : { nodes: q.prompt, clues: [] };
       return (
         <div className="max-w-2xl mx-auto space-y-3">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <span>Soru {idx + 1} / {qs.length} · <span className="text-blue-300 font-bold">{q.type}</span></span>
-            <span>Doğru: {correctN} / {answered}</span>
+            {timed
+              ? <span className={"font-black text-sm " + (remaining <= 60 ? 'text-red-400' : 'text-indigo-300')}>⏱ {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}</span>
+              : <span>Doğru: {correctN} / {answered}</span>}
           </div>
           <div className="h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: (idx / qs.length * 100) + '%' }} /></div>
           <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
-            <p className="text-sm text-slate-100 font-serif leading-relaxed whitespace-pre-wrap">{q.prompt}</p>
+            <p className="text-sm text-slate-100 font-serif leading-relaxed whitespace-pre-wrap">{rendered.nodes}</p>
+            {rendered.clues.length > 0 && (
+              <div className="text-[11px] text-orange-200 bg-orange-950/30 border border-orange-900/40 rounded-lg px-3 py-2 space-y-0.5">
+                {rendered.clues.map(c => <p key={c.w}>💡 <b>{c.w}</b> {CLUE_HINT[c.cat] || c.cat}</p>)}
+              </div>
+            )}
             <div className="space-y-2">
               {q.options.map((o, i) => {
                 const state = !isAnswered ? 'idle' : i === q.answer ? 'right' : i === my ? 'wrong' : 'dim';
                 const cls = { idle: 'border-slate-700 hover:border-blue-500 hover:bg-slate-900', right: 'border-emerald-500 bg-emerald-600/15 text-emerald-200', wrong: 'border-red-500 bg-red-600/15 text-red-200', dim: 'border-slate-800 text-slate-500' }[state];
                 return (
-                  <button key={i} disabled={isAnswered} onClick={() => { setPicked({ ...picked, [idx]: i }); if (onAnswer) onAnswer(q.type, i === q.answer); }}
+                  <button key={i} disabled={isAnswered || (timed && my !== undefined)} onClick={() => {
+                    setPicked({ ...picked, [idx]: i });
+                    if (onAnswer) onAnswer(q.type, i === q.answer);
+                    if (timed) setTimeout(() => setIdx(x => x + 1), 250);     // süreli denemede doğrudan sonraki soru
+                  }}
                           className={"w-full text-left px-4 py-2.5 rounded-xl border text-sm transition " + cls}>
                     <b className="mr-2">{LETTERS[i]})</b>{o}
                   </button>
@@ -2496,10 +3291,19 @@
               </div>
             )}
             <div className="flex justify-between">
-              <button onClick={() => setQs(null)} className="text-xs text-slate-500 hover:text-slate-300">Sınavı bitir</button>
-              <button disabled={!isAnswered} onClick={() => setIdx(idx + 1)} className="px-5 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white disabled:opacity-40">
-                {idx + 1 < qs.length ? 'Sonraki →' : 'Sonucu gör'}
-              </button>
+              {timed ? (
+                <>
+                  <button onClick={() => { const f = { ...picked }; qs.forEach((_, i) => { if (f[i] === undefined) f[i] = -1; }); setPicked(f); setIdx(qs.length); }} className="text-xs text-slate-500 hover:text-slate-300">Teslim et</button>
+                  <button onClick={() => { if (picked[idx] === undefined) setPicked({ ...picked, [idx]: -1 }); setIdx(idx + 1); }} className="px-5 py-2 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">Boş geç →</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => setQs(null)} className="text-xs text-slate-500 hover:text-slate-300">Sınavı bitir</button>
+                  <button disabled={!isAnswered} onClick={() => setIdx(idx + 1)} className="px-5 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white disabled:opacity-40">
+                    {idx + 1 < qs.length ? 'Sonraki →' : 'Sonucu gör'}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2872,6 +3676,7 @@
         try { const u = await lookupMeaning(c); if (u) onUpdate(u); } finally { setRefreshingId(null); }
       };
       const [filter, setFilter] = useState(recentIds && recentIds.length ? 'recent' : 'all');
+      const [qTypeFilter, setQTypeFilter] = useState('all');
       const [flipped, setFlipped] = useState(() => new Set());
       const [order, setOrder] = useState(null);           // karıştırılmış sıra (id listesi) ya da null
       const [editingId, setEditingId] = useState(null);
@@ -2886,6 +3691,7 @@
         if (filter === 'recent' && !recentSet.has(c.id)) return false;
         if (filter === 'missing' && !isMissingMeaning(c)) return false;
         if (filter.startsWith('r:') && c.readingTitle !== filter.slice(2)) return false;
+        if (qTypeFilter !== 'all' && c.questionType !== qTypeFilter) return false;
         if (q && !(c.english.toLowerCase().includes(q) || (c.turkish || '').toLowerCase().includes(q))) return false;
         return true;
       });
@@ -2927,6 +3733,16 @@
               {recentIds && recentIds.length > 0 && <option value="recent">Son eklenenler ({recentIds.length})</option>}
               <option value="missing">Anlamı eksik olanlar ({missingCount})</option>
               {readingTitles.map(t => <option key={t} value={'r:' + t}>Metin: {t}</option>)}
+            </select>
+            <select value={qTypeFilter} onChange={e => setQTypeFilter(e.target.value)} aria-label="Soru tipine göre filtrele" className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-indigo-300">
+              <option value="all">Tüm Soru Tipleri</option>
+              <option value="Kelime Soruları (1-6)">Kelime (1-6)</option>
+              <option value="Gramer & Edat (7-16)">Gramer & Edat (7-16)</option>
+              <option value="Cloze Test (17-26)">Cloze Test (17-26)</option>
+              <option value="Cümle Tamamlama (27-36)">Cümle Tamamlama (27-36)</option>
+              <option value="Çeviri Soruları (37-48)">Çeviri (37-48)</option>
+              <option value="Paragraf Soruları (49-80)">Paragraf (49-80)</option>
+              <option value="Genel Akademik">Genel Akademik</option>
             </select>
             {onAudio && <button onClick={onAudio} disabled={!cards.length} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-xs font-bold text-white disabled:opacity-40">🎧 Dinleyerek çalış</button>}
             <button onClick={shuffle} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">🔀 Karıştır</button>
@@ -2983,7 +3799,14 @@
                     >
                       {!back ? (
                         <div className="flex-1 flex flex-col items-center justify-center text-center gap-1">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{c.partOfSpeech}</span>
+                          <div className="flex flex-wrap items-center justify-center gap-1">
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{c.partOfSpeech}</span>
+                            {c.questionType && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-950/70 border border-indigo-800/60 text-indigo-300">
+                                {c.questionType.split(' ')[0]}
+                              </span>
+                            )}
+                          </div>
                           <span className="text-2xl font-black text-white mt-1">{c.english}</span>
                           {c.ipa && <span className="text-[11px] font-mono text-slate-400">/{c.ipa}/</span>}
                           {c.okunus && <span className="text-xs text-amber-300">[{c.okunus}]</span>}
@@ -3293,6 +4116,9 @@
       const [turkish, setTurkish] = useState('');
       const [pos, setPos] = useState('noun');
       const [sentence, setSentence] = useState(initialSentence);
+      const [qType, setQType] = useState('Kelime Soruları (1-6)');
+      const [synonymsInput, setSynonymsInput] = useState('');
+      const [antonymsInput, setAntonymsInput] = useState('');
 
       // --- Otomatik anlam: kelime yazılınca Türkçe anlam, tür, okunuş, örnek, eş/zıt anlamlılar kendiliğinden gelir ---
       const [info, setInfo] = useState(null);             // { lemma, ipa, okunus, audioUrl, definition, examples, synonyms, antonyms, trSenses, trSource }
@@ -3321,6 +4147,8 @@
           setInfo({ ...d, lemma });
           if (!posTouched.current && ['noun', 'verb', 'adjective', 'adverb'].includes(d.partOfSpeech || usePos)) setPos(d.partOfSpeech || usePos);
           if (!turkishTouched.current) setTurkish(d.turkish || '');
+          if (!synonymsInput && d.synonyms && d.synonyms.length) setSynonymsInput(d.synonyms.slice(0, 5).join(', '));
+          if (!antonymsInput && d.antonyms && d.antonyms.length) setAntonymsInput(d.antonyms.slice(0, 4).join(', '));
           setLookup(d.turkish ? 'found' : 'notfound');
         } catch (e) {
           if (my !== reqId.current) return;
@@ -3337,6 +4165,7 @@
       const onPosChange = (v) => {
         posTouched.current = true;
         setPos(v);
+        if (v === 'prepositional_phrase') setQType('Gramer & Edat (7-16)');
         if (['noun', 'verb', 'adjective', 'adverb'].includes(v) && english.trim()) runLookup(english, v);   // türe uygun anlamı yeniden getir
       };
 
@@ -3348,6 +4177,8 @@
         // Tek kelimede kök hâli kaydedilir ("defects" → "defect"); ifadeler yazıldığı gibi kalır
         const typed = english.trim();
         const isSingle = /^[A-Za-z][A-Za-z'’-]*$/.test(typed);
+        const synList = synonymsInput ? synonymsInput.split(',').map(s => s.trim()).filter(Boolean) : (info && info.synonyms || []);
+        const antList = antonymsInput ? antonymsInput.split(',').map(s => s.trim()).filter(Boolean) : (info && info.antonyms || []);
         onSave({
           id: newId,
           english: isSingle && info && info.lemma ? info.lemma : typed,
@@ -3360,8 +4191,9 @@
           audioUrl: info && info.audioUrl || '',
           definition: info && info.definition || '',
           examples: info && info.examples || [],
-          synonyms: info && info.synonyms || [],
-          antonyms: info && info.antonyms || [],
+          synonyms: synList,
+          antonyms: antList,
+          questionType: qType,
           partOfSpeech: pos,
           originalSentence: sentence.trim(),
           sourceType: 'user_reading',
@@ -3431,19 +4263,65 @@
               </div>
             )}
 
-            <select
-              value={pos}
-              onChange={e => onPosChange(e.target.value)}
-              aria-label="Kelime türü"
-              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
-            >
-              <option value="noun">İsim (Noun)</option>
-              <option value="verb">Fiil (Verb)</option>
-              <option value="adjective">Sıfat (Adjective)</option>
-              <option value="adverb">Zarf (Adverb)</option>
-              <option value="collocation">Kalıp İfade (Collocation)</option>
-              <option value="prepositional_phrase">Edatlı Yapı</option>
-            </select>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Kelime Türü</label>
+                <select
+                  value={pos}
+                  onChange={e => onPosChange(e.target.value)}
+                  aria-label="Kelime türü"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                >
+                  <option value="noun">İsim (Noun)</option>
+                  <option value="verb">Fiil (Verb)</option>
+                  <option value="adjective">Sıfat (Adjective)</option>
+                  <option value="adverb">Zarf (Adverb)</option>
+                  <option value="collocation">Kalıp İfade (Collocation)</option>
+                  <option value="prepositional_phrase">Edatlı Yapı</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">YÖKDİL Soru Tipi</label>
+                <select
+                  value={qType}
+                  onChange={e => setQType(e.target.value)}
+                  aria-label="YÖKDİL Soru Tipi"
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                >
+                  <option value="Kelime Soruları (1-6)">Kelime Soruları (1-6)</option>
+                  <option value="Gramer & Edat (7-16)">Gramer & Edat (7-16)</option>
+                  <option value="Cloze Test (17-26)">Cloze Test (17-26)</option>
+                  <option value="Cümle Tamamlama (27-36)">Cümle Tamamlama (27-36)</option>
+                  <option value="Çeviri Soruları (37-48)">Çeviri Soruları (37-48)</option>
+                  <option value="Paragraf Soruları (49-80)">Paragraf Soruları (49-80)</option>
+                  <option value="Genel Akademik">Genel Akademik</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Eş ve Zıt Anlam Düzenleme */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-slate-400">Eş Anlamlılar (virgülle ayırın)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. lack, scarcity"
+                  value={synonymsInput}
+                  onChange={e => setSynonymsInput(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-emerald-300 placeholder:text-slate-600"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-slate-400">Zıt Anlamlılar (virgülle ayırın)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. abundance, surplus"
+                  value={antonymsInput}
+                  onChange={e => setAntonymsInput(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-red-300 placeholder:text-slate-600"
+                />
+              </div>
+            </div>
             <textarea
               rows={3}
               placeholder="Metindeki orijinal cümle"
@@ -4165,6 +5043,278 @@
                 {!queueMode ? 'Metni Kaydet'
                   : mergeDocs && readyDocs.length > 1 ? 'Birleştirip Kaydet'
                   : readyDocs.length > 1 ? readyDocs.length + ' Metni Kaydet' : 'Metni Kaydet'}
+              </button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    // --- YÖKDİL ÇIKMIŞ SINAV & DENEME YÜKLEME MODALI ---
+    function UploadExamModal({ onClose, onSave }) {
+      const [title, setTitle] = useState('');
+      const [field, setField] = useState('Fen Bilimleri');
+      const [year, setYear] = useState(new Date().getFullYear());
+      const [term, setTerm] = useState('İlkbahar');
+      const [mode, setMode] = useState('file');
+      const [fileStatus, setFileStatus] = useState('');
+      const [rawText, setRawText] = useState('');
+      const [answerKeyText, setAnswerKeyText] = useState('');
+      const [isParsing, setIsParsing] = useState(false);
+      const [parsedQuestions, setParsedQuestions] = useState([]);
+      const [showPreview, setShowPreview] = useState(false);
+
+      const extractPdfTextSimple = async (buffer) => {
+        if (!window.pdfjsLib) throw new Error('PDF okuyucu kütüphanesi hazır değil.');
+        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const tc = await page.getTextContent();
+          const text = tc.items.map(it => it.str + (it.hasEOL ? '\n' : ' ')).join('');
+          pages.push(text);
+        }
+        return pages.join('\n\n');
+      };
+
+      const handleFileChange = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        setIsParsing(true);
+        setFileStatus(`"${file.name}" okunuyor ve sorular taranıyor...`);
+        try {
+          if (!title) {
+            const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+            setTitle(cleanName);
+          }
+          const buffer = await file.arrayBuffer();
+          let text = '';
+          if (file.name.toLowerCase().endsWith('.pdf')) {
+            text = await extractPdfTextSimple(buffer);
+          } else if (file.name.toLowerCase().endsWith('.docx') && window.mammoth) {
+            const res = await mammoth.extractRawText({ arrayBuffer: buffer });
+            text = res.value;
+          } else {
+            text = new TextDecoder('utf-8').decode(buffer);
+          }
+          setRawText(text);
+          const qs = parseYokdilExamText(text, answerKeyText);
+          setParsedQuestions(qs);
+          setFileStatus(`✓ Dosya başarıyla okundu: ${qs.length} soru ayrıştırıldı.`);
+        } catch (err) {
+          console.error(err);
+          setFileStatus('❌ Hata: ' + (err.message || 'Dosya okunamadı.'));
+        } finally {
+          setIsParsing(false);
+        }
+      };
+
+      const handleTextChange = (txt) => {
+        setRawText(txt);
+        if (txt.trim().length > 30) {
+          const qs = parseYokdilExamText(txt, answerKeyText);
+          setParsedQuestions(qs);
+        } else {
+          setParsedQuestions([]);
+        }
+      };
+
+      const handleKeyChange = (keys) => {
+        setAnswerKeyText(keys);
+        if (rawText.trim().length > 30) {
+          const qs = parseYokdilExamText(rawText, keys);
+          setParsedQuestions(qs);
+        }
+      };
+
+      const handleSave = (e) => {
+        e.preventDefault();
+        if (!parsedQuestions.length) return;
+        const examId = 'exam_' + Date.now();
+        const newExam = {
+          id: examId,
+          title: title.trim() || `${year} ${term} YÖKDİL ${field}`,
+          field,
+          year: parseInt(year, 10) || new Date().getFullYear(),
+          term,
+          questions: parsedQuestions,
+          uploadedAt: new Date().toISOString()
+        };
+        onSave(newExam);
+      };
+
+      const categoriesCount = {};
+      parsedQuestions.forEach(q => {
+        categoriesCount[q.category] = (categoriesCount[q.category] || 0) + 1;
+      });
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={handleSave} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="font-bold text-base text-white">📄 YÖKDİL Çıkmış Sınav / Deneme Yükle</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Geçmiş yıl sınav PDF'ini yükleyin; sorular, şıklar ve soru tipleri otomatik ayrıştırılır.</p>
+              </div>
+              <button type="button" onClick={onClose} className="text-slate-400 hover:text-white text-sm">✕</button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="sm:col-span-3">
+                <label className="text-[10px] font-bold text-slate-400">Sınav Adı</label>
+                <input
+                  type="text"
+                  placeholder="Örn: 2023 İlkbahar YÖKDİL Sağlık Bilimleri"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Alan</label>
+                <select value={field} onChange={e => setField(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+                  <option value="Fen Bilimleri">Fen Bilimleri</option>
+                  <option value="Sağlık Bilimleri">Sağlık Bilimleri</option>
+                  <option value="Sosyal Bilimler">Sosyal Bilimler</option>
+                  <option value="Genel">Genel</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Yıl</label>
+                <input type="number" value={year} onChange={e => setYear(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white" />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-slate-400">Dönem</label>
+                <select value={term} onChange={e => setTerm(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white">
+                  <option value="İlkbahar">İlkbahar</option>
+                  <option value="Sonbahar">Sonbahar</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Dosya veya Metin Seçimi */}
+            <div className="flex gap-2 border-b border-slate-800 pb-2">
+              <button
+                type="button"
+                onClick={() => setMode('file')}
+                className={"px-3 py-1.5 rounded-lg text-xs font-bold transition " + (mode === 'file' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}
+              >
+                📎 PDF / Word Dosyası Yükle
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('paste')}
+                className={"px-3 py-1.5 rounded-lg text-xs font-bold transition " + (mode === 'paste' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}
+              >
+                📝 Metin / Soruları Yapıştır
+              </button>
+            </div>
+
+            {mode === 'file' ? (
+              <div className="p-4 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 text-center space-y-2">
+                <input
+                  type="file"
+                  id="examFileInput"
+                  accept=".pdf,.docx,.txt"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <label htmlFor="examFileInput" className="cursor-pointer inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow">
+                  📁 PDF veya Word Seç
+                </label>
+                <p className="text-[11px] text-slate-400">YÖKDİL sınav kitapçığı PDF'ini seçin (metinler otomatik ayrıştırılır).</p>
+                {fileStatus && (
+                  <p className={"text-xs font-bold " + (fileStatus.startsWith('✓') ? 'text-emerald-400' : fileStatus.startsWith('❌') ? 'text-red-400' : 'text-blue-300')}>
+                    {fileStatus}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-slate-400">Soru Metinleri</label>
+                <textarea
+                  rows={6}
+                  placeholder="Soruları buraya yapıştırın (Örn: 1. The recent... A) ... B) ...)"
+                  value={rawText}
+                  onChange={e => handleTextChange(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"
+                />
+              </div>
+            )}
+
+            {/* Cevap Anahtarı (Opsiyonel) */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-slate-400">Cevap Anahtarı (Opsiyonel)</label>
+              <input
+                type="text"
+                placeholder="Örn: 1-A 2-C 3-D 4-E 5-B... (Metin sonunda veya PDF'te varsa otomatik eşleşir)"
+                value={answerKeyText}
+                onChange={e => handleKeyChange(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"
+              />
+            </div>
+
+            {/* Analiz Özeti */}
+            {parsedQuestions.length > 0 && (
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-400">
+                    ✓ Toplam {parsedQuestions.length} soru başarıyla ayrıştırıldı
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowPreview(!showPreview)}
+                    className="text-[11px] text-blue-400 hover:underline font-bold"
+                  >
+                    {showPreview ? 'Önizlemeyi Gizle' : 'Soruları Önizle (' + parsedQuestions.length + ')'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {Object.entries(categoriesCount).map(([cat, cnt]) => (
+                    <span key={cat} className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                      {cat.split(' ')[0]}: <b>{cnt}</b>
+                    </span>
+                  ))}
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
+                    Cevabı Bilinen: <b>{parsedQuestions.filter(q => q.answer >= 0).length} / {parsedQuestions.length}</b>
+                  </span>
+                </div>
+
+                {showPreview && (
+                  <div className="mt-3 max-h-56 overflow-y-auto space-y-2 border-t border-slate-800 pt-2 text-xs">
+                    {parsedQuestions.slice(0, 30).map((q) => (
+                      <div key={q.num} className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 space-y-1">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-bold text-white">Soru {q.num}</span>
+                          <span className="text-indigo-400 font-semibold">{q.category}</span>
+                          {q.correctLetter && <span className="text-emerald-400 font-bold">Cevap: {q.correctLetter}</span>}
+                        </div>
+                        <p className="text-slate-300 font-serif line-clamp-2">{q.prompt}</p>
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 text-[10px] text-slate-400 font-mono">
+                          {q.options.map((opt, oi) => (
+                            <span key={oi} className={q.answer === oi ? 'text-emerald-300 font-bold' : ''}>
+                              {['A','B','C','D','E'][oi]}) {opt}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {parsedQuestions.length > 30 && (
+                      <p className="text-[10px] text-slate-500 text-center">...ve {parsedQuestions.length - 30} soru daha</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              <button
+                type="submit"
+                disabled={!parsedQuestions.length}
+                className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white hover:bg-blue-500 disabled:opacity-50"
+              >
+                {parsedQuestions.length ? `${parsedQuestions.length} Soruyu Sınav Bankasına Ekle` : 'Dosya Bekleniyor'}
               </button>
             </div>
           </form>

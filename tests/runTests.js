@@ -3,6 +3,7 @@ import { runSrsTests } from './srs.test.js';
 import { runSentenceExtractorTests } from './sentenceExtractor.test.js';
 import { runDuplicateTests } from './duplicateDetection.test.js';
 import { runImportExportTests } from './importExport.test.js';
+import { runExamParserTests } from './test_exam_parser.js';
 
 console.log('====================================================');
 console.log('   YÖKDİL MASTER - TEMEL BİRİM VE SİSTEM TESTLERİ   ');
@@ -15,6 +16,7 @@ try {
   runSentenceExtractorTests();
   runDuplicateTests();
   runImportExportTests();
+  runExamParserTests();
 
   const duration = Date.now() - startTime;
   console.log('\n====================================================');
