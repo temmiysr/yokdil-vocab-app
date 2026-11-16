@@ -2235,9 +2235,6 @@
         </div>
       );
     }
-        </div>
-      );
-    }
 
     // --- AKADEMİK KELİME LİSTESİ (AWL, Coxhead 2000): 570 kelime ailesi, 10 alt liste (1 = en sık) ---
     const AWL_SUBLISTS = [
