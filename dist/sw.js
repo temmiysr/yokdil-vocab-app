@@ -1,12 +1,16 @@
 // YÖKDİL Master – Service Worker (çevrimdışı çalışma)
 // - Uygulama sayfası: önce ağ, ağ yoksa önbellek (güncellemeler hemen gelsin, internet yokken de açılsın)
 // - CDN kütüphaneleri (React, Babel, Tailwind, PDF.js, Firebase SDK…): önbellekten, yoksa ağdan alıp önbelleğe yaz
-// - Firebase/Google API'leri, sözlük ve çeviri servisleri: HİÇ dokunulmaz (giriş ve eşitleme bozulmasın)
-const VERSION = 'yokdil-v3';
+// - OCR dosyaları (Tesseract worker, wasm çekirdeği, İngilizce dil verisi) ve PDF.js worker'ı: ilk kullanımda ayrı
+//   önbelleğe alınır; sonra internet yokken de resim/PDF okunabilir. Sürüm değişse de bu büyük dosyalar korunur.
+// - Firebase/Google API'leri, sözlük ve çeviri servisleri, Claude API: HİÇ dokunulmaz (giriş ve eşitleme bozulmasın)
+const VERSION = 'yokdil-v4';
 const APP_CACHE = VERSION + '-app';
 const CDN_CACHE = VERSION + '-cdn';
+const OCR_CACHE = 'yokdil-ocr-v1';     // büyük dosyalar: sürüm yükseltmelerinde silinmez
 const APP_SHELL = ['./', './index.html', './favicon.svg', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
-const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.tailwindcss.com', 'www.gstatic.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+const CDN_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com', 'cdn.tailwindcss.com', 'www.gstatic.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'tessdata.projectnaptha.com'];
+const isOcrAsset = (url) => /\.(wasm|traineddata)(\.gz)?$/.test(url.pathname) || /tesseract|pdf\.worker/.test(url.pathname) || url.hostname === 'tessdata.projectnaptha.com';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(APP_CACHE).then((c) => c.addAll(APP_SHELL)).catch(() => {}));
@@ -15,7 +19,7 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))))
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => !k.startsWith(VERSION) && k !== OCR_CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -44,11 +48,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // CDN kütüphaneleri (büyük OCR dil/wasm dosyaları hariç)
-  if (CDN_HOSTS.includes(url.hostname) && !/\.(wasm|traineddata)(\.gz)?$/.test(url.pathname) && !/firebasejs\/.*\/(firestore|auth)\.js\.map$/.test(url.pathname)) {
-    event.respondWith(caches.open(CDN_CACHE).then((cache) => cache.match(req).then((hit) => {
-      const net = fetch(req).then((res) => { if (res.ok || res.type === 'opaque') cache.put(req, res.clone()); return res; });
-      return hit || net;
+  // CDN kütüphaneleri ve OCR dosyaları: önbellekte varsa oradan (sürümlü adresler değişmez), yoksa ağdan alıp kaydet
+  if (CDN_HOSTS.includes(url.hostname) && !/\.map$/.test(url.pathname)) {
+    const cacheName = isOcrAsset(url) ? OCR_CACHE : CDN_CACHE;
+    event.respondWith(caches.open(cacheName).then((cache) => cache.match(req).then((hit) => {
+      if (hit) return hit;
+      return fetch(req).then((res) => {
+        // Yalnızca tam (200) yanıtlar kaydedilir; kısmi (206) ya da hatalı yanıtlar önbelleğe girmez
+        if (res.status === 200 || res.type === 'opaque') cache.put(req, res.clone()).catch(() => {});
+        return res;
+      });
     })));
   }
   // Diğer her şey (Firebase, Firestore, Google girişi, sözlük/çeviri API'leri): tarayıcıya bırak
