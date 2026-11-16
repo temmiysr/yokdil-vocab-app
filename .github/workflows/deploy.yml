@@ -1,0 +1,47 @@
+name: Deploy to GitHub Pages
+
+# Uygulamanın güncel ve çalışan sürümü dist/ klasöründedir (tek dosyalık dist/index.html:
+# PDF/Word/OCR okuma, çoklu dosya, otomatik kelime çıkarma, Kelime Kartları vb.).
+# Bu yüzden derleme YAPILMAZ; dist/ olduğu gibi yayınlanır. (src/ eski Vite kaynak kodudur.)
+#
+# Not: Ücretsiz GitHub hesabında GİZLİ (private) depodan Pages yayınlanamaz.
+# Depo gizliyken bu iş push'ta kendiliğinden çalışmaz (hata e-postası gelmez).
+# Depoyu herkese açık yaparsanız veya GitHub Pro kullanıyorsanız:
+#   Settings → Pages → Source: "GitHub Actions" seçin; sonra Actions sekmesinden "Run workflow" ile çalıştırın.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.repository.private == false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dist as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

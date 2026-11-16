@@ -1,0 +1,2644 @@
+<!DOCTYPE html>
+<html lang="tr" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>YÖKDİL Master – Kişisel Kelime Öğrenme & Akıllı Tekrar</title>
+  <meta name="description" content="Kişisel YÖKDİL İngilizce Kelime Öğrenme, Okuma Analizi ve Aralıklı Tekrar (SRS) Uygulaması" />
+  <meta name="theme-color" content="#0f172a" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            academic: {
+              50: '#f0f5fa', 100: '#e1ecf5', 500: '#3f85be', 600: '#2d6ba2', 700: '#265684', 900: '#1b3854'
+            }
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            serif: ['Merriweather', 'Georgia', 'serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+
+  <!-- Harici Kütüphaneler -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+  <!-- PDF (pdf.js) ve Word (.docx, mammoth) dosyalarından metin okuma -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <!-- Resimdeki yazıları okuma (OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+  </script>
+
+  <style>
+    body { font-feature-settings: "cv02", "cv03", "cv04", "cv11"; }
+    ::selection { background-color: rgba(59, 130, 246, 0.3); color: #93c5fd; }
+    .safe-area-bottom { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
+  </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 font-sans select-text overflow-hidden">
+  <div id="root"></div>
+
+  <!-- React 18, ReactDOM 18 & Babel Standalone for direct browser execution -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Standalone Browser App -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- TEMEL VERİ KATMANI (Offline-first localStorage) ---
+    const STORAGE_KEYS = {
+      WEEKS: 'yokdil_weeks_v1',
+      READINGS: 'yokdil_readings_v1',
+      VOCAB: 'yokdil_vocab_cards_v1',
+      SETTINGS: 'yokdil_user_settings_v1',
+    };
+
+    function getStored(key, def) {
+      try {
+        const val = localStorage.getItem(key);
+        return val ? JSON.parse(val) : def;
+      } catch (e) {
+        return def;
+      }
+    }
+
+    function setStored(key, val) {
+      localStorage.setItem(key, JSON.stringify(val));
+    }
+
+    // --- SM-2 ARALIKLI TEKRAR MOTORU ---
+    function getTodayStr() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function addDays(dateStr, days) {
+      const d = new Date(dateStr + 'T00:00:00');
+      d.setDate(d.getDate() + days);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    }
+
+    function createSRS(cardId) {
+      return {
+        cardId,
+        state: 'new',
+        interval: 0,
+        easeFactor: 2.5,
+        repetitions: 0,
+        lapses: 0,
+        lastReviewedAt: null,
+        nextReviewAt: getTodayStr(),
+      };
+    }
+
+    function processReview(item, rating) {
+      const today = getTodayStr();
+      let rep = item.repetitions;
+      let ease = item.easeFactor;
+      let interval = item.interval;
+      let lapses = item.lapses;
+      let state = item.state;
+
+      if (rating === 1) {
+        rep = 0;
+        interval = 1;
+        ease = Math.max(1.3, ease - 0.2);
+        lapses += 1;
+        state = 'learning';
+      } else {
+        if (rep === 0) {
+          interval = rating === 4 ? 3 : 1;
+          if (rating === 4) ease = Math.min(3.0, ease + 0.15);
+          if (rating === 2) ease = Math.max(1.3, ease - 0.15);
+          rep = 1;
+          state = 'learning';
+        } else if (rep === 1) {
+          interval = rating === 4 ? 6 : (rating === 2 ? 2 : 3);
+          rep = 2;
+          state = 'learning';
+        } else if (rep === 2) {
+          interval = rating === 4 ? 12 : (rating === 2 ? 4 : 7);
+          rep = 3;
+          state = 'review';
+        } else {
+          let mod = rating === 2 ? 0.8 : (rating === 4 ? 1.3 : 1.0);
+          if (rating === 2) ease = Math.max(1.3, ease - 0.15);
+          if (rating === 4) ease = Math.min(3.0, ease + 0.15);
+          interval = Math.max(interval + 1, Math.round(interval * ease * mod));
+          rep += 1;
+          state = interval >= 30 ? 'mastered' : 'review';
+        }
+      }
+
+      ease = Math.round(ease * 100) / 100;
+      return {
+        ...item,
+        state,
+        interval,
+        easeFactor: ease,
+        repetitions: rep,
+        lapses,
+        lastReviewedAt: new Date().toISOString(),
+        nextReviewAt: addDays(today, interval),
+      };
+    }
+
+    // --- TELAFFUZ (SpeechSynthesis) ---
+    function speakText(text) {
+      if (!('speechSynthesis' in window)) return;
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US';
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+    }
+
+    // --- CÜMLE ÇIKARMA VE MÜKERRER KONTROLÜ ---
+    function extractSentence(text, target) {
+      if (!text || !target) return '';
+      const idx = text.toLowerCase().indexOf(target.toLowerCase());
+      if (idx === -1) return target;
+
+      let start = idx;
+      while (start > 0) {
+        const c = text[start - 1];
+        if (c === '\n') break;
+        if (['.', '!', '?'].includes(c)) {
+          const pre = text.slice(Math.max(0, start - 8), start).toLowerCase();
+          if (!/(e\.g|i\.e|e\.|i\.|dr|mr|vs|etc|u\.s)\.$/i.test(pre)) break;
+        }
+        start--;
+      }
+
+      let end = idx + target.length;
+      while (end < text.length) {
+        const c = text[end];
+        if (c === '\n') break;
+        if (['.', '!', '?'].includes(c)) {
+          const sub = text.slice(Math.max(0, end - 6), end + 1).toLowerCase();
+          const next = text.slice(end + 1, Math.min(text.length, end + 4)).toLowerCase();
+          const isAbbr = /(e\.g|i\.e|dr|mr|vs|etc|u\.s)\.$/i.test(sub) || (/\b[a-z]\.$/i.test(sub) && /^[a-z]\./i.test(next));
+          if (!isAbbr) { end++; break; }
+        }
+        end++;
+      }
+      return text.slice(start, end).trim().replace(/\s+/g, ' ');
+    }
+
+    // --- OTOMATİK KELİME ÇIKARMA VE SÖZLÜK ---
+    // Kaynaklar (ücretsiz, anahtar gerektirmez; yalnızca İngilizce kelime gönderilir):
+    //   Datamuse (kelime sıklığı, eş/zıt anlam) · dictionaryapi.dev (IPA, ses, tanım, örnek) · MyMemory (Türkçe karşılık)
+
+    // Çok yaygın İngilizce kelimeler (öğrenme listesine alınmaz)
+    const STOPWORDS = new Set((
+      'the be to of and a in that have i it for not on with he as you do at this but his by from they we say her she or an will my one all would there their what so up out if about who get which go me when make can like time no just him know take people into year your good some could them see other than then now look only come its over think also back after use two how our work first well way even new want because any these give day most us is are was were been being has had did does done said made used such each many much more very own same both few those here where why own while through during before above below between under again further once off down should may might must shall upon among within without into onto toward towards against along around across behind beyond however therefore thus although though whether either neither also yet still already always never often sometimes usually perhaps maybe really quite rather almost enough every another something anything nothing everything someone anyone everyone nobody thing things part parts place case point group number fact hand high great small large long little old big right left last next early late young sure able bad best better less least whole real true full open per via etc mr mrs ms dr st vs'
+    ).split(/\s+/));
+
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    // Hata/hız sınırına karşı tekrar denemeli JSON isteği (404 → null)
+    const fetchJson = async (url, tries = 3) => {
+      for (let a = 0; a < tries; a++) {
+        try {
+          const r = await fetch(url);
+          if (r.status === 404) return null;
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return await r.json();
+        } catch (e) {
+          if (a === tries - 1) throw e;
+          await sleep(500 * (a + 1));
+        }
+      }
+    };
+
+    // Sınırlı eşzamanlılıkla iş havuzu
+    const runPool = async (items, limit, fn, onProgress) => {
+      const res = new Array(items.length);
+      let next = 0, done = 0;
+      const worker = async () => {
+        while (next < items.length) {
+          const k = next++;
+          try { res[k] = await fn(items[k], k); } catch (e) { res[k] = null; }
+          done++;
+          if (onProgress) onProgress(done, items.length);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+      return res;
+    };
+
+    // Basit önbellek (aynı kelime için tekrar istek atmamak için)
+    const CACHE_KEYS = { FREQ: 'yokdil_freq_cache_v1', DICT: 'yokdil_dict_cache_v2' };
+    try { localStorage.removeItem('yokdil_dict_cache_v1'); } catch (e) {}           // eski (yalnızca MyMemory) önbellek
+    const cacheGet = (k) => { try { return JSON.parse(localStorage.getItem(k) || '{}'); } catch (e) { return {}; } };
+    const cacheSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+
+    // Datamuse: kelimenin sıklığı (milyonda) ve etiketleri; bulunamazsa null
+    const freqCache = cacheGet(CACHE_KEYS.FREQ);
+    const lookupFreq = async (w) => {
+      if (w in freqCache) return freqCache[w];
+      const j = await fetchJson('https://api.datamuse.com/words?sp=' + encodeURIComponent(w) + '&md=fp&max=1');
+      let v = null;
+      if (j && j[0] && j[0].word === w) {
+        const tags = j[0].tags || [];
+        const f = parseFloat((tags.find(t => t.startsWith('f:')) || 'f:0').slice(2));
+        v = { f, tags: tags.filter(t => !t.startsWith('f:')) };
+      }
+      freqCache[w] = v;
+      return v;
+    };
+
+    // Kural tabanlı kök adayları (transformed → transform, studies → study, stopped → stop)
+    const lemmaCandidates = (w) => {
+      const c = [w];
+      if (/ies$/.test(w)) c.push(w.slice(0, -3) + 'y');
+      if (/(ches|shes|sses|xes|zes|oes)$/.test(w)) c.push(w.slice(0, -2));
+      if (/s$/.test(w) && !/(ss|us|is)$/.test(w)) c.push(w.slice(0, -1));
+      if (/ied$/.test(w)) c.push(w.slice(0, -3) + 'y');
+      if (/ed$/.test(w)) { const s = w.slice(0, -2); c.push(s, s + 'e'); if (/([b-df-hj-np-tv-z])\1$/.test(s)) c.push(s.slice(0, -1)); }
+      if (/ing$/.test(w)) { const s = w.slice(0, -3); c.push(s, s + 'e'); if (/([b-df-hj-np-tv-z])\1$/.test(s)) c.push(s.slice(0, -1)); }
+      return [...new Set(c)].filter(x => x.length >= 3);
+    };
+
+    // Kelimeyi köküne indir: kök adayı yeterince yaygınsa (orijinalin ≥%30'u) onu seç
+    const resolveLemma = async (w) => {
+      const cands = lemmaCandidates(w);
+      const infos = await Promise.all(cands.map(c => lookupFreq(c).catch(() => null)));
+      const orig = infos[0];
+      let best = null;
+      cands.forEach((c, i) => {
+        if (i === 0 || !infos[i]) return;
+        if (!best || infos[i].f > best.info.f) best = { word: c, info: infos[i] };
+      });
+      if (best && (!orig || best.info.f >= orig.f * 0.3)) return best;
+      return orig ? { word: w, info: orig } : null;
+    };
+
+    // Metinden öğrenmeye değer kelime adaylarını çıkarır
+    const extractCandidates = async (text, { maxFreq, minFreq = 0.2, onProgress }) => {
+      const plain = text.replace(/^##\s+/gm, '');
+      const counts = new Map();
+      (plain.match(/[A-Za-z]+(?:['’][A-Za-z]+)?/g) || []).forEach(tok => {
+        if (/['’]/.test(tok)) tok = tok.replace(/['’]s$/i, '');
+        if (/['’]/.test(tok)) return;
+        const w = tok.toLowerCase();
+        if (w.length < 4 || STOPWORDS.has(w)) return;
+        const e = counts.get(w) || { count: 0, surface: tok };
+        e.count++;
+        counts.set(w, e);
+      });
+      const words = [...counts.keys()];
+      const resolved = await runPool(words, 4, resolveLemma, onProgress);
+      cacheSet(CACHE_KEYS.FREQ, freqCache);
+
+      const groups = new Map();
+      words.forEach((w, i) => {
+        const r = resolved[i];
+        if (!r || !r.info) return;                                     // sözlükte yok (isim, OCR hatası...)
+        if (r.info.tags.includes('prop')) return;                       // özel isim
+        if (STOPWORDS.has(r.word)) return;
+        if (r.info.f > maxFreq || r.info.f < minFreq) return;           // çok yaygın / çok nadir
+        const g = groups.get(r.word) || { lemma: r.word, freq: r.info.f, tags: r.info.tags, count: 0, forms: [] };
+        g.count += counts.get(w).count;
+        g.forms.push(counts.get(w).surface);
+        groups.set(r.word, g);
+      });
+      return [...groups.values()].map(g => ({ ...g, pos: posFor(g.lemma, g.forms, g.tags), sentence: extractSentence(plain, g.forms[0]) }));
+    };
+
+    // Datamuse etiketinden kelime türü (etiketler olasılık sırasındadır; ilk uygun etiket alınır)
+    const posFromTags = (tags) => {
+      const first = (tags || []).find(t => ['n', 'v', 'adj', 'adv'].includes(t));
+      return { n: 'noun', v: 'verb', adj: 'adjective', adv: 'adverb' }[first] || 'noun';
+    };
+    // Metindeki kullanım biçimine göre tür: "assembled/introducing" → fiil, aksi halde Datamuse'un ilk etiketi
+    const posFor = (lemma, forms, tags) => {
+      const f = (forms || []).map(x => x.toLowerCase());
+      if (f.some(x => x !== lemma && /(ed|ing)$/.test(x)) && (tags || []).includes('v')) return 'verb';
+      return posFromTags(tags);
+    };
+
+    // Sıklık → seviye etiketi
+    const freqLevel = (f) => f < 3 ? { label: 'İleri', cls: 'bg-purple-950 text-purple-300' } : f < 20 ? { label: 'Orta-İleri', cls: 'bg-blue-950 text-blue-300' } : { label: 'Orta', cls: 'bg-emerald-950 text-emerald-300' };
+
+    // IPA → Türkçe harflerle okunuş (vurgulu hece BÜYÜK): /sɪɡˈnɪ.fɪ.kənt/ → sig-Nİ-fi-kınt
+    const ipaToTurkish = (ipa) => {
+      if (!ipa) return '';
+      let s = ipa.split(',')[0].replace(/\([^)]*\)/g, '').replace(/[\/\[\]]/g, '').trim();   // (ɹ) gibi isteğe bağlı sesler atılır
+      const map = [
+        ['t͡ʃ', 'ç'], ['tʃ', 'ç'], ['d͡ʒ', 'c'], ['dʒ', 'c'], ['eɪ', 'ey'], ['aɪ', 'ay'], ['ɔɪ', 'oy'], ['aʊ', 'av'], ['əʊ', 'ou'], ['oʊ', 'ou'],
+        ['ɪə', 'iı'], ['eə', 'eı'], ['ɛə', 'eı'], ['ʊə', 'uı'],
+        ['iː', 'i'], ['uː', 'u'], ['ɑː', 'a'], ['ɔː', 'o'], ['ɜː', 'ö'], ['ɝ', 'ör'], ['ɚ', 'ır'],
+        ['ɪ', 'i'], ['ʊ', 'u'], ['ə', 'ı'], ['ʌ', 'a'], ['æ', 'e'], ['ɑ', 'a'], ['ɒ', 'o'], ['ɔ', 'o'], ['ɛ', 'e'], ['ɜ', 'ö'], ['ɐ', 'a'], ['ᵻ', 'i'], ['ɨ', 'ı'],
+        ['θ', 't'], ['ð', 'd'], ['ʃ', 'ş'], ['j', 'y'], ['ʒ', 'j'], ['ŋ', 'ng'], ['ɹ', 'r'], ['ɾ', 't'], ['ɡ', 'g'], ['ɫ', 'l'], ['ʔ', ''], ['ː', ''], ['̩', ''], ['ˌ', '.'],
+      ];
+      for (const [a, b] of map) s = s.split(a).join(b);
+      s = s.replace(/ˈ/g, '·').replace(/[^a-zçğıöşüy·.]/g, '');
+      const isV = (ch) => 'aeıioöuü'.includes(ch);
+      const stressPos = s.replace(/\./g, '').indexOf('·');
+      const letters = s.replace(/[·.]/g, '');
+      if (!letters) return '';
+      // Türkçe hece kuralları: V-CV, VC-CV
+      const sylls = []; let cur = '';
+      for (let i = 0; i < letters.length; i++) {
+        cur += letters[i];
+        if (!isV(letters[i])) continue;
+        let j = i + 1; while (j < letters.length && !isV(letters[j])) j++;
+        if (j >= letters.length) { cur += letters.slice(i + 1); break; }
+        const cons = letters.slice(i + 1, j);
+        if (cons.length <= 1) { sylls.push(cur); cur = ''; }
+        else { const keep = cons.slice(0, cons.length - 1); cur += keep; sylls.push(cur); cur = ''; i += keep.length; }
+      }
+      if (cur) { if (sylls.length && !/[aeıioöuü]/.test(cur)) sylls[sylls.length - 1] += cur; else sylls.push(cur); }
+      let stressed = -1;
+      if (stressPos >= 0 && sylls.length > 1) {
+        const firstV = letters.slice(stressPos).search(/[aeıioöuü]/) + stressPos;
+        let pos = 0;
+        for (let k = 0; k < sylls.length; k++) { if (firstV >= pos && firstV < pos + sylls[k].length) { stressed = k; break; } pos += sylls[k].length; }
+      }
+      return sylls.map((x, k) => k === stressed ? x.toLocaleUpperCase('tr') : x).join('-');
+    };
+
+    // Türkçe karşılıklar (MyMemory): birden çok anlam toplanır
+    const fetchTurkish = async (word) => {
+      const j = await fetchJson('https://api.mymemory.translated.net/get?q=' + encodeURIComponent(word) + '&langpair=en|tr');
+      if (!j) return { meanings: [], quota: false };
+      if (j.quotaFinished) return { meanings: [], quota: true };
+      // Yalnızca kelimenin kendisiyle birebir eşleşen, makul kaliteli kayıtlar (cümle parçaları, ünlemli/garip girdiler elenir)
+      const w = word.toLowerCase();
+      const raw = [j.responseData && j.responseData.translatedText].concat(
+        (j.matches || [])
+          .filter(m => String(m.segment || '').trim().toLowerCase() === w)
+          .filter(m => m.quality == null || +m.quality >= 60)
+          .sort((a, b) => (+b.quality || 0) - (+a.quality || 0))
+          .map(m => m.translation)
+      );
+      const seen = new Set(), meanings = [];
+      raw.forEach(t => {
+        if (!t) return;
+        const v = String(t).trim().replace(/\.+$/, '').trim().toLocaleLowerCase('tr');
+        if (!v || v === w || seen.has(v)) return;
+        if (!/^[a-zçğıöşüâîû][a-zçğıöşüâîû' -]*[a-zçğıöşüâîû]$/i.test(v)) return;   // !, [ ], rakam, tek harf vb.
+        if (v.split(/\s+/).length > 3) return;
+        seen.add(v); meanings.push(v);
+      });
+      return { meanings: meanings.slice(0, 4), quota: false };
+    };
+
+    // Türkçe karşılıklar (Wiktionary, CC BY-SA): İngilizce Vikisözlük'teki "Translations" tablolarından, anlam başlığı ve türüyle.
+    // Resmî MediaWiki API'si kullanılır (programla erişime izin verir).
+    const cleanWikiItem = (s) => s
+      .replace(/\{\{tt?\+?\|tr\|([^}|]+)[^}]*\}\}/g, '$1')
+      .replace(/\{\{l\|tr\|([^}|]+)[^}]*\}\}/g, '$1')
+      .replace(/\{\{[^}]*\}\}/g, '')
+      .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
+      .replace(/\[\[([^\]]+)\]\]/g, '$1')
+      .replace(/\([^)]*\)/g, '')
+      .replace(/['"’]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const parseWiktionaryTurkish = (wikitext) => {
+      if (!wikitext) return { senses: [], subpage: false };
+      const parts = wikitext.split(/\n==(?!=)/);
+      const en = parts.find(s => /^\s*English\s*==/.test(s)) || (parts[0].startsWith('==English==') ? parts[0] : '');
+      const senses = [];
+      let pos = null, sense = null;
+      en.split('\n').forEach(line => {
+        const h = line.match(/^===+\s*(Noun|Verb|Adjective|Adverb|Proper noun)\s*=+/);
+        if (h) pos = h[1].toLowerCase();
+        const tt = line.match(/\{\{trans-top(?:-also)?\|([^}|]*)/);
+        if (tt) sense = tt[1].trim();
+        else if (/\{\{trans-top\}\}/.test(line)) sense = '';
+        if (/^\*\s*Turkish\s*:/.test(line)) {
+          const body = line.replace(/^\*\s*Turkish\s*:/, '');
+          const words = body.replace(/\{\{[^}]*\}\}/g, m => /^\{\{(tt?\+?|l)\|tr\|/.test(m) ? cleanWikiItem(m) + ',' : '')
+            .split(/[,;]/).map(cleanWikiItem).filter(w => w && /^[a-zçğıöşüâîû][a-zçğıöşüâîû ' -]*$/i.test(w) && w.split(' ').length <= 4);
+          if (words.length) senses.push({ pos, sense, words: [...new Set(words)] });
+        }
+      });
+      return { senses, subpage: /\{\{see translation subpage/.test(en) };
+    };
+
+    const fetchWikiText = async (page) => {
+      const j = await fetchJson('https://en.wiktionary.org/w/api.php?action=parse&page=' + encodeURIComponent(page) + '&prop=wikitext&format=json&formatversion=2&redirects=1&origin=*');
+      return j && j.parse ? j.parse.wikitext : null;
+    };
+
+    const fetchWiktionaryTurkish = async (word, wantPos) => {
+      let { senses, subpage } = parseWiktionaryTurkish(await fetchWikiText(word));
+      if (subpage) {
+        const sub = parseWiktionaryTurkish('==English==\n' + ((await fetchWikiText(word + '/translations').catch(() => null)) || ''));
+        senses = senses.concat(sub.senses);
+      }
+      if (!senses.length) return { meanings: [], senses: [] };
+      // İstenen türdeki anlamlar önce; en fazla 5 karşılık
+      const ordered = [...senses.filter(s => s.pos === wantPos), ...senses.filter(s => s.pos !== wantPos)];
+      const meanings = [];
+      ordered.forEach(s => s.words.forEach(w => { if (meanings.length < 5 && !meanings.includes(w)) meanings.push(w); }));
+      return { meanings, senses: ordered.slice(0, 4) };
+    };
+
+    // Önce Wiktionary, bulunamazsa MyMemory
+    const fetchTurkishAuto = async (word, wantPos) => {
+      try {
+        const wk = await fetchWiktionaryTurkish(word, wantPos);
+        if (wk.meanings.length) return { meanings: wk.meanings, senses: wk.senses, source: 'Wiktionary', quota: false };
+      } catch (e) {}
+      const mm = await fetchTurkish(word).catch(() => ({ meanings: [], quota: false }));
+      return { meanings: mm.meanings, senses: [], source: mm.meanings.length ? 'MyMemory' : '', quota: mm.quota };
+    };
+
+    // Bir kelimenin tüm ayrıntıları: Türkçe anlam, IPA, okunuş, ses, tanım, örnekler, eş/zıt anlamlılar
+    const dictCache = cacheGet(CACHE_KEYS.DICT);
+    const fetchWordDetails = async (lemma, wantPos) => {
+      const key = lemma + '|' + wantPos;
+      if (dictCache[key]) return dictCache[key];
+      const [dict, syn, ant, tr] = await Promise.all([
+        fetchJson('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(lemma)).catch(() => null),
+        fetchJson('https://api.datamuse.com/words?rel_syn=' + encodeURIComponent(lemma) + '&max=8').catch(() => []),
+        fetchJson('https://api.datamuse.com/words?rel_ant=' + encodeURIComponent(lemma) + '&max=6').catch(() => []),
+        fetchTurkishAuto(lemma, wantPos).catch(() => ({ meanings: [], senses: [], source: '', quota: false })),
+      ]);
+      const entries = Array.isArray(dict) ? dict : [];
+      const phonetics = entries.flatMap(e => e.phonetics || []);
+      let ipa = (entries.find(e => e.phonetic) || {}).phonetic || (phonetics.find(p => p.text) || {}).text || '';
+      if (!ipa) {
+        // Yedek: Datamuse telaffuz verisi (IPA)
+        const pr = await fetchJson('https://api.datamuse.com/words?sp=' + encodeURIComponent(lemma) + '&md=r&ipa=1&max=1').catch(() => null);
+        const tag = pr && pr[0] && (pr[0].tags || []).find(t => t.startsWith('ipa_pron:'));
+        if (tag) ipa = tag.slice(9);
+      }
+      const audioUrl = (phonetics.find(p => p.audio && /-us\./.test(p.audio)) || phonetics.find(p => p.audio) || {}).audio || '';
+      const meanings = entries.flatMap(e => e.meanings || []);
+      const main = meanings.find(m => m.partOfSpeech === wantPos) || meanings[0];
+      const pos = wantPos || (main && main.partOfSpeech) || 'noun';
+      const defs = main ? (main.definitions || []) : [];
+      const examples = meanings.flatMap(m => (m.definitions || []).map(d => d.example)).filter(Boolean).slice(0, 2);
+      const uniq = (arr, n) => [...new Set(arr.map(x => String(x).trim().toLowerCase()).filter(x => x && x !== lemma))].slice(0, n);
+      const synonyms = uniq([
+        ...meanings.flatMap(m => (m.synonyms || []).concat((m.definitions || []).flatMap(d => d.synonyms || []))),
+        ...(syn || []).map(x => x.word),
+      ], 6);
+      const antonyms = uniq([
+        ...meanings.flatMap(m => (m.antonyms || []).concat((m.definitions || []).flatMap(d => d.antonyms || []))),
+        ...(ant || []).map(x => x.word),
+      ], 5);
+      const details = {
+        turkish: tr.meanings.join(', '),
+        trSenses: tr.senses || [],
+        trSource: tr.source || '',
+        trQuota: tr.quota,
+        ipa: ipa.replace(/^\/|\/$/g, ''),
+        okunus: ipaToTurkish(ipa),
+        audioUrl,
+        partOfSpeech: pos,
+        definition: defs.slice(0, 2).map(d => d.definition).join(' / '),
+        examples,
+        synonyms,
+        antonyms,
+      };
+      if (!tr.quota) { dictCache[key] = details; cacheSet(CACHE_KEYS.DICT, dictCache); }
+      return details;
+    };
+
+    // Tureng: kullanım koşulları otomatik veri çekmeyi yasakladığı için yalnızca kelime sayfasına bağlantı verilir
+    // (kullanıcı sayfayı kendisi açar, anlamı kendisi kopyalar)
+    const turengUrl = (word) => 'https://tureng.com/tr/turkce-ingilizce/' + encodeURIComponent(String(word || '').trim().toLowerCase());
+    const TurengLink = ({ word, className }) => (
+      <a
+        href={turengUrl(word)}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={e => e.stopPropagation()}
+        title={'"' + word + '" kelimesini Tureng\'de aç (yeni sekme)'}
+        className={"inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-950/60 border border-red-900 text-[10px] font-bold text-red-300 hover:bg-red-900 hover:text-white transition " + (className || '')}
+      >
+        Tureng ↗
+      </a>
+    );
+    const isMissingMeaning = (c) => !c.turkish || /^\(anlam bulunamadı/.test(c.turkish);
+
+    const playWord = (card) => {
+      if (card.audioUrl) {
+        const a = new Audio(card.audioUrl);
+        a.play().catch(() => speakText(card.english));
+      } else speakText(card.english);
+    };
+
+    // --- ANA UYGULAMA BİLEŞENİ ---
+    function App() {
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [weeks, setWeeks] = useState(() => getStored(STORAGE_KEYS.WEEKS, []));
+      const [readings, setReadings] = useState(() => getStored(STORAGE_KEYS.READINGS, []));
+      const [cards, setCards] = useState(() => getStored(STORAGE_KEYS.VOCAB, []));
+      const [settings, setSettings] = useState(() => getStored(STORAGE_KEYS.SETTINGS, {
+        theme: 'dark',
+        notificationTime: '20:00',
+        telegramEnabled: false,
+        telegramBotToken: '',
+        telegramChatId: '',
+        appUrl: window.location.href,
+        cloudProvider: 'none'
+      }));
+
+      // Modallar ve Detay Durumları
+      const [selectedWeekId, setSelectedWeekId] = useState(null);
+      const [selectedReadingId, setSelectedReadingId] = useState(null);
+      const [isVocabModalOpen, setIsVocabModalOpen] = useState(false);
+      const [editingCard, setEditingCard] = useState(null);
+      const [initialWord, setInitialWord] = useState('');
+      const [initialSentence, setInitialSentence] = useState('');
+      const [isNewWeekOpen, setIsNewWeekOpen] = useState(false);
+      const [isUploadReadingOpen, setIsUploadReadingOpen] = useState(false);
+      const [autoVocabReadingId, setAutoVocabReadingId] = useState(null);
+      const [recentCardIds, setRecentCardIds] = useState([]);
+      const [toast, setToast] = useState('');
+      const [duplicateCard, setDuplicateCard] = useState(null);
+
+      // Metin Seçimi ve Popover
+      const [selectionText, setSelectionText] = useState('');
+      const [popoverPos, setPopoverPos] = useState(null);
+
+      useEffect(() => {
+        setStored(STORAGE_KEYS.WEEKS, weeks);
+      }, [weeks]);
+      useEffect(() => {
+        setStored(STORAGE_KEYS.READINGS, readings);
+      }, [readings]);
+
+      const deleteReading = (id) => {
+        const r = readings.find(x => x.id === id);
+        if (!r) return;
+        if (!window.confirm('"' + r.title + '" metni silinsin mi? Bu işlem geri alınamaz.\n(Bu metinden kaydettiğiniz kelimeler silinmez.)')) return;
+        setReadings(prev => prev.filter(x => x.id !== id));
+        if (selectedReadingId === id) setSelectedReadingId(null);
+      };
+      useEffect(() => {
+        setStored(STORAGE_KEYS.VOCAB, cards);
+      }, [cards]);
+      useEffect(() => {
+        setStored(STORAGE_KEYS.SETTINGS, settings);
+      }, [settings]);
+
+      // Hesaplamalar
+      const today = getTodayStr();
+      const dueCards = cards.filter(c => c.srs.nextReviewAt <= today);
+      const difficultCards = cards.filter(c => c.isDifficult || c.srs.lapses >= 3);
+      const masteredCards = cards.filter(c => c.srs.state === 'mastered');
+
+      // Okuma Metninde Seçim Olayı
+      const handleReaderSelection = (readingContent) => {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) {
+          setPopoverPos(null);
+          return;
+        }
+        const text = sel.toString().trim();
+        if (text.length >= 2) {
+          const range = sel.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          const sentence = extractSentence(readingContent, text);
+          setSelectionText(text);
+          setInitialSentence(sentence);
+          setPopoverPos({ top: rect.top, left: rect.left + rect.width / 2 });
+        }
+      };
+
+      // Kelime Listeme Ekle Eylemi
+      const handleAddSelection = () => {
+        const norm = selectionText.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+        const dup = cards.find(c => c.english.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim() === norm);
+        if (dup) {
+          setDuplicateCard(dup);
+          setPopoverPos(null);
+        } else {
+          setInitialWord(selectionText);
+          setEditingCard(null);
+          setIsVocabModalOpen(true);
+          setPopoverPos(null);
+        }
+      };
+
+      // Mükerrer Karta Kaynak Ekleme
+      const handleAppendSource = () => {
+        if (!duplicateCard) return;
+        const currentReading = readings.find(r => r.id === selectedReadingId);
+        const updated = cards.map(c => {
+          if (c.id === duplicateCard.id) {
+            const sources = c.sources || [];
+            sources.push({
+              readingId: currentReading?.id || '',
+              readingTitle: currentReading?.title || '',
+              sentence: initialSentence,
+              dateAdded: new Date().toISOString()
+            });
+            return { ...c, sources, updatedAt: new Date().toISOString() };
+          }
+          return c;
+        });
+        setCards(updated);
+        setDuplicateCard(null);
+        alert('Mevcut karta yeni örnek cümle ve kaynak başarıyla eklendi!');
+      };
+
+      return (
+        <div className="flex h-screen w-screen overflow-hidden bg-slate-900 text-slate-100 font-sans">
+          {/* Masaüstü Yan Menü */}
+          <aside className="hidden md:flex flex-col w-64 bg-slate-950 border-r border-slate-800 p-4 select-none">
+            <div className="flex items-center gap-3 pb-5 border-b border-slate-800">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center font-black text-white text-lg shadow-lg shadow-blue-500/20">
+                Y
+              </div>
+              <div>
+                <h1 className="font-extrabold text-base tracking-tight text-white flex items-center gap-1.5">
+                  YÖKDİL Master
+                  <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded font-mono font-bold">SRS</span>
+                </h1>
+                <p className="text-xs text-slate-400">Kişisel Kelime Sistemi</p>
+              </div>
+            </div>
+
+            <nav className="flex-1 py-4 space-y-1">
+              {[
+                { id: 'dashboard', label: 'Ana Sayfa', icon: '📊' },
+                { id: 'daily-review', label: 'Günlük Tekrar', icon: '🔄', badge: dueCards.length },
+                { id: 'weeks', label: 'Haftalık Listelerim', icon: '📅' },
+                { id: 'readings', label: 'Okuma Parçalarım', icon: '📖' },
+                { id: 'bank', label: 'YÖKDİL Kelime Bankası', icon: '🗄️' },
+                { id: 'flashcards', label: 'Kelime Kartları', icon: '🃏', badge: cards.filter(isMissingMeaning).length },
+                { id: 'study', label: 'Sınavlar & Testler', icon: '🎓' },
+                { id: 'difficult', label: 'Zorlandığım Kelimeler', icon: '⚠️', badge: difficultCards.length },
+                { id: 'stats', label: 'İstatistikler', icon: '📈' },
+                { id: 'settings', label: 'Ayarlar', icon: '⚙️' },
+              ].map(item => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    setActiveTab(item.id);
+                    if (item.id !== 'weeks') setSelectedWeekId(null);
+                    if (item.id !== 'readings') setSelectedReadingId(null);
+                  }}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition ${
+                    activeTab === item.id ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' : 'text-slate-300 hover:bg-slate-800/80'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </div>
+                  {item.badge !== undefined && item.badge > 0 && (
+                    <span className="text-[10px] bg-white text-blue-700 px-2 py-0.5 rounded-full font-black">
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </nav>
+
+            <div className="p-3 bg-slate-900/80 rounded-xl border border-slate-800 text-[11px] text-slate-400">
+              <span className="font-bold text-slate-300">Kişisel İçerik Kuralı:</span>
+              <p className="mt-0.5">Yalnızca sizin yüklediğiniz okuma metinleri ve kelimeler saklanır.</p>
+            </div>
+          </aside>
+
+          {/* Ana İçerik */}
+          <div className="flex-1 flex flex-col h-full overflow-hidden">
+            {/* Header */}
+            <header className="bg-slate-950 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-white capitalize">
+                  {({
+                    'dashboard': 'Ana Sayfa', 'daily-review': 'Günlük Tekrar (Spaced Repetition)', 'weeks': 'Haftalık Listelerim',
+                    'readings': 'Okuma Parçalarım', 'bank': 'YÖKDİL Kelime Bankası', 'flashcards': 'Kelime Kartları', 'study': 'Sınavlar & Testler',
+                    'difficult': 'Zorlandığım Kelimeler', 'stats': 'İstatistikler', 'settings': 'Ayarlar',
+                  })[activeTab] || activeTab}
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsUploadReadingOpen(true)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 hover:bg-slate-700 text-slate-200 transition"
+                >
+                  + Metin Yükle
+                </button>
+                <button
+                  onClick={() => {
+                    setEditingCard(null);
+                    setInitialWord('');
+                    setInitialSentence('');
+                    setIsVocabModalOpen(true);
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow transition"
+                >
+                  + Kelime Ekle
+                </button>
+              </div>
+            </header>
+
+            {/* Sayfalar */}
+            <main className="flex-1 overflow-y-auto p-6 max-w-6xl w-full mx-auto pb-20 md:pb-6">
+              {/* ANA SAYFA */}
+              {activeTab === 'dashboard' && (
+                <div className="space-y-6">
+                  <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 rounded-3xl p-8 text-white shadow-xl relative overflow-hidden">
+                    <h2 className="text-2xl font-black">
+                      {dueCards.length > 0 ? `Bugün ${dueCards.length} Kelime Tekrar Bekliyor!` : 'Harika! Bugünkü Tüm Tekrarlarını Tamamladın.'}
+                    </h2>
+                    <p className="text-xs text-blue-100 mt-2 max-w-xl">
+                      Aralıklı tekrar algoritması bilginizi unutulma eşiğinde hafızanıza çağırarak uzun vadeli kalıcılık sağlar.
+                    </p>
+                    <div className="mt-5 flex gap-3">
+                      {dueCards.length > 0 ? (
+                        <button
+                          onClick={() => setActiveTab('daily-review')}
+                          className="px-5 py-2.5 rounded-xl bg-white text-blue-900 font-extrabold text-xs shadow-lg hover:bg-blue-50 transition"
+                        >
+                          Tekrarı Başlat ({dueCards.length})
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => setActiveTab('study')}
+                          className="px-5 py-2.5 rounded-xl bg-white/20 text-white font-bold text-xs hover:bg-white/30 transition"
+                        >
+                          Sınav Modları
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setIsUploadReadingOpen(true)}
+                        className="px-4 py-2.5 rounded-xl bg-white/10 text-white font-semibold text-xs hover:bg-white/20 transition"
+                      >
+                        Yeni Metin Yükle
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* İstatistik Kutuları */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+                      <p className="text-xs text-slate-400">Toplam Kayıtlı Kelime</p>
+                      <p className="text-3xl font-black text-white mt-1">{cards.length}</p>
+                    </div>
+                    <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+                      <p className="text-xs text-blue-400">Bugün Tekrar</p>
+                      <p className="text-3xl font-black text-blue-400 mt-1">{dueCards.length}</p>
+                    </div>
+                    <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+                      <p className="text-xs text-emerald-400">Kalıcı Hafızada</p>
+                      <p className="text-3xl font-black text-emerald-400 mt-1">{masteredCards.length}</p>
+                    </div>
+                    <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800">
+                      <p className="text-xs text-amber-400">Zorlandığım</p>
+                      <p className="text-3xl font-black text-amber-400 mt-1">{difficultCards.length}</p>
+                    </div>
+                  </div>
+
+                  {/* Haftalarım Listesi */}
+                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-bold text-sm text-white">Haftalık Çalışma Listelerim</h3>
+                      <button
+                        onClick={() => setIsNewWeekOpen(true)}
+                        className="text-xs text-blue-400 font-bold hover:underline"
+                      >
+                        + Yeni Hafta Oluştur
+                      </button>
+                    </div>
+                    {weeks.length === 0 ? (
+                      <div className="text-center py-10 border border-dashed border-slate-800 rounded-xl text-xs text-slate-400">
+                        Henüz çalışma haftası oluşturulmadı. "Yeni Hafta Oluştur" butonuna basarak başlayabilirsiniz.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {weeks.map(w => {
+                          const wReadings = readings.filter(r => r.weekId === w.id);
+                          const wCards = cards.filter(c => c.weekId === w.id);
+                          return (
+                            <div
+                              key={w.id}
+                              onClick={() => { setSelectedWeekId(w.id); setActiveTab('weeks'); }}
+                              className="p-4 rounded-xl bg-slate-900 border border-slate-800 hover:border-blue-500 cursor-pointer transition flex justify-between items-center"
+                            >
+                              <div>
+                                <h4 className="font-bold text-sm text-white">{w.title}</h4>
+                                <p className="text-xs text-slate-400 mt-1">{wReadings.length} metin • {wCards.length} kelime</p>
+                              </div>
+                              <span className="text-xs font-bold text-blue-400">Görüntüle →</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* GÜNLÜK TEKRAR */}
+              {activeTab === 'daily-review' && (
+                <div className="max-w-xl mx-auto space-y-4">
+                  {dueCards.length === 0 ? (
+                    <div className="text-center py-16 bg-slate-950 rounded-3xl border border-slate-800 p-8 space-y-4">
+                      <div className="text-5xl">🎉</div>
+                      <h3 className="text-xl font-bold text-white">Harika İş!</h3>
+                      <p className="text-xs text-slate-400">Bugün tekrar bekleyen kelimeniz bulunmuyor. Yeni bir okuma parçası ekleyebilir veya sınav modlarını deneyebilirsiniz.</p>
+                      <button onClick={() => setActiveTab('study')} className="px-5 py-2.5 rounded-xl bg-blue-600 font-bold text-xs text-white">
+                        Sınav Modlarına Git
+                      </button>
+                    </div>
+                  ) : (
+                    <DailyReviewSession
+                      cards={dueCards}
+                      onComplete={() => {
+                        if (window.confetti) window.confetti({ particleCount: 100 });
+                        setActiveTab('dashboard');
+                      }}
+                      onRate={(cardId, rating) => {
+                        const updated = cards.map(c => {
+                          if (c.id === cardId) {
+                            return { ...c, srs: processReview(c.srs, rating) };
+                          }
+                          return c;
+                        });
+                        setCards(updated);
+                      }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* OKUMA PARÇALARI VE READER */}
+              {activeTab === 'readings' && (
+                selectedReadingId ? (
+                  (() => {
+                    const current = readings.find(r => r.id === selectedReadingId);
+                    if (!current) return null;
+                    return (
+                      <div className="space-y-4 max-w-4xl mx-auto">
+                        <div className="flex justify-between items-center">
+                          <button
+                            onClick={() => setSelectedReadingId(null)}
+                            className="text-xs font-bold text-slate-400 hover:text-blue-400"
+                          >
+                            ← Tüm Okuma Parçalarına Dön
+                          </button>
+                          <button
+                            onClick={() => setAutoVocabReadingId(current.id)}
+                            className="ml-auto mr-2 px-3 py-1.5 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-500 transition"
+                          >
+                            ✨ Kelimeleri Çıkar
+                          </button>
+                          <button
+                            onClick={() => deleteReading(current.id)}
+                            className="px-3 py-1.5 rounded-lg bg-red-600/15 border border-red-600/40 text-xs font-bold text-red-400 hover:bg-red-600 hover:text-white transition"
+                          >
+                            🗑 Metni Sil
+                          </button>
+                        </div>
+                        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
+                          <h2 className="text-xl font-black text-white">{current.title}</h2>
+                          <p className="text-xs text-slate-400 mt-1">{current.category} • {current.wordCount} kelime</p>
+                        </div>
+
+                        {/* Metin Alanı ve Seçim */}
+                        <div
+                          onMouseUp={() => handleReaderSelection(current.content)}
+                          onTouchEnd={() => handleReaderSelection(current.content)}
+                          className="bg-slate-950 p-8 rounded-2xl border border-slate-800 text-slate-200 font-serif leading-loose text-base whitespace-pre-wrap select-text"
+                        >
+                          {/* "## " ile başlayan satırlar başlık olarak kalın gösterilir */}
+                          {current.content.split('\n').map((line, i) => (
+                            /^##\s+/.test(line)
+                              ? <strong key={i} className="block font-sans font-black text-white text-lg leading-snug mt-2 mb-1">{line.replace(/^##\s+/, '')}</strong>
+                              : <React.Fragment key={i}>{line}{'\n'}</React.Fragment>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center">
+                      <h3 className="font-bold text-lg text-white">Yüklediğiniz Okuma Parçaları</h3>
+                      <button onClick={() => setIsUploadReadingOpen(true)} className="px-3.5 py-1.5 rounded-xl bg-blue-600 text-xs font-bold text-white">
+                        + Metin Yükle
+                      </button>
+                    </div>
+                    {readings.length === 0 ? (
+                      <div className="text-center py-16 bg-slate-950 rounded-2xl border border-dashed border-slate-800 text-xs text-slate-400">
+                        Henüz okuma metni yüklenmedi.
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {readings.map(r => (
+                          <div
+                            key={r.id}
+                            onClick={() => setSelectedReadingId(r.id)}
+                            className="relative p-5 rounded-2xl bg-slate-950 border border-slate-800 hover:border-blue-500 cursor-pointer transition"
+                          >
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteReading(r.id); }}
+                              title="Metni sil"
+                              aria-label={'"' + r.title + '" metnini sil'}
+                              className="absolute top-3 right-3 px-2 py-1 rounded-lg text-xs text-slate-500 hover:bg-red-600 hover:text-white transition"
+                            >
+                              🗑 Sil
+                            </button>
+                            <span className="text-[10px] font-bold text-blue-400">{r.category}</span>
+                            <h4 className="font-bold text-base text-white mt-1">{r.title}</h4>
+                            <p className="text-xs text-slate-400 line-clamp-3 mt-2 font-serif">{r.content.replace(/^##\s+/gm, '')}</p>
+                            <p className="text-[11px] text-blue-400 font-bold mt-4">Aç ve Kelime Seç →</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              )}
+
+              {/* KELİME KARTLARI */}
+              {activeTab === 'flashcards' && (
+                <FlashcardsSection
+                  cards={cards}
+                  readings={readings}
+                  recentIds={recentCardIds}
+                  onUpdate={(updated) => setCards(prev => prev.map(c => c.id === updated.id ? updated : c))}
+                  onUpdateMany={(list) => { const m = new Map(list.map(c => [c.id, c])); setCards(prev => prev.map(c => m.get(c.id) || c)); }}
+                  onDelete={(id) => {
+                    const word = (cards.find(c => c.id === id) || {}).english;
+                    setCards(prev => prev.filter(c => c.id !== id));
+                    setRecentCardIds(prev => prev.filter(x => x !== id));
+                    setReadings(prev => prev.map(r => (r.savedWordIds || []).includes(id) ? { ...r, savedWordIds: r.savedWordIds.filter(x => x !== id) } : r));
+                    setToast('"' + word + '" kartı silindi.');
+                    setTimeout(() => setToast(''), 3000);
+                  }}
+                />
+              )}
+
+              {/* YÖKDİL KELİME BANKASI */}
+              {activeTab === 'bank' && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="font-bold text-lg text-white">Kelime Bankası ({cards.length})</h3>
+                    <button
+                      onClick={() => {
+                        const q = (v) => '"' + String(Array.isArray(v) ? v.join('; ') : (v || '')).replace(/"/g, '""') + '"';
+                        const csvContent = "English,Turkish,IPA,Okunus,PartOfSpeech,Synonyms,Antonyms,OriginalSentence,Examples\n" +
+                          cards.map(c => [c.english, c.turkish, c.ipa, c.okunus, c.partOfSpeech, c.synonyms, c.antonyms, c.originalSentence, c.examples].map(q).join(',')).join("\n");
+                        const blob = new Blob(['﻿' + csvContent], { type: 'text/csv;charset=utf-8;' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a'); a.href = url; a.download = 'yokdil_kelimeler.csv'; a.click();
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200"
+                    >
+                      CSV Dışa Aktar
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {cards.map(c => (
+                      <div key={c.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{c.partOfSpeech}</span>
+                          <div className="flex items-center gap-2">
+                            <TurengLink word={c.lemma || c.english} />
+                            <button onClick={() => playWord(c)} className="text-xs text-blue-400">🔊 Dinle</button>
+                          </div>
+                        </div>
+                        <h4 className="font-bold text-base text-white">{c.english}</h4>
+                        {(c.ipa || c.okunus) && (
+                          <p className="text-[11px] text-slate-400">
+                            {c.ipa && <span className="font-mono">/{c.ipa}/</span>}
+                            {c.okunus && <span className="text-amber-300 ml-1.5">[{c.okunus}]</span>}
+                          </p>
+                        )}
+                        <p className="text-xs font-semibold text-blue-400">{c.turkish}</p>
+                        {c.originalSentence && (
+                          <p className="text-[11px] text-slate-400 font-serif italic line-clamp-2">"{c.originalSentence}"</p>
+                        )}
+                        {(c.examples || [])[0] && <p className="text-[11px] text-slate-500 font-serif line-clamp-2">• {c.examples[0]}</p>}
+                        {(c.synonyms || []).length > 0 && (
+                          <p className="text-[10px]"><span className="text-slate-500">Eş:</span> <span className="text-emerald-300">{c.synonyms.slice(0, 4).join(', ')}</span></p>
+                        )}
+                        {(c.antonyms || []).length > 0 && (
+                          <p className="text-[10px]"><span className="text-slate-500">Zıt:</span> <span className="text-red-300">{c.antonyms.slice(0, 3).join(', ')}</span></p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* AYARLAR */}
+              {activeTab === 'settings' && (
+                <div className="max-w-xl mx-auto space-y-6">
+                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+                    <h3 className="font-bold text-base text-white">Telegram Bildirim Ayarları</h3>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Telegram Bot Token</label>
+                      <input
+                        type="password"
+                        value={settings.telegramBotToken}
+                        onChange={e => setSettings({ ...settings, telegramBotToken: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg text-xs bg-slate-900 border border-slate-800 text-white font-mono"
+                        placeholder="BotFather'dan alınan token"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-300 mb-1">Telegram Chat ID</label>
+                      <input
+                        type="text"
+                        value={settings.telegramChatId}
+                        onChange={e => setSettings({ ...settings, telegramChatId: e.target.value })}
+                        className="w-full px-3 py-2 rounded-lg text-xs bg-slate-900 border border-slate-800 text-white font-mono"
+                        placeholder="@userinfobot ile öğrenilen ID"
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!settings.telegramBotToken || !settings.telegramChatId) {
+                          alert('Lütfen Bot Token ve Chat ID giriniz.');
+                          return;
+                        }
+                        try {
+                          const res = await fetch(`https://api.telegram.org/bot${settings.telegramBotToken}/sendMessage`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              chat_id: settings.telegramChatId,
+                              text: `🔔 <b>YÖKDİL Master Test Bildirimi</b>\n\nTelegram bağlantınız başarıyla sağlandı!`,
+                              parse_mode: 'HTML'
+                            })
+                          });
+                          const d = await res.json();
+                          if (d.ok) alert('Test bildirimi Telegram hesabınıza gönderildi!');
+                          else alert('Hata: ' + d.description);
+                        } catch (err) {
+                          alert('Ağ hatası: ' + err.message);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-blue-600 text-xs font-bold text-white shadow"
+                    >
+                      Test Bildirimi Gönder
+                    </button>
+                  </div>
+                </div>
+              )}
+            </main>
+          </div>
+
+          {/* Kayan Kelime Seçim Butonu */}
+          {popoverPos && (
+            <div
+              style={{ top: `${popoverPos.top}px`, left: `${popoverPos.left}px`, transform: 'translate(-50%, -100%) translateY(-10px)' }}
+              className="fixed z-50 bg-slate-950 border border-slate-700 text-white p-2 rounded-xl shadow-2xl flex items-center gap-2"
+            >
+              <button
+                onClick={handleAddSelection}
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow transition"
+              >
+                + Kelime Listeme Ekle
+              </button>
+              <span className="text-xs text-slate-300 font-mono">"{selectionText}"</span>
+            </div>
+          )}
+
+          {/* Mükerrer Kelime Uyarısı */}
+          {duplicateCard && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-4">
+                <h3 className="font-bold text-base text-white">Kelime Zaten Kayıtlı!</h3>
+                <p className="text-xs text-slate-300">
+                  <b>"{duplicateCard.english}"</b> ifadesi daha önce kaydedilmiş. İkinci bir kart açmak yerine bu okuma parçasındaki cümleyi mevcut karta eklemek ister misiniz?
+                </p>
+                <div className="flex gap-2">
+                  <button onClick={handleAppendSource} className="flex-1 py-2 rounded-xl bg-blue-600 text-xs font-bold text-white">
+                    (Önerilen) Cümleyi Ekle
+                  </button>
+                  <button onClick={() => setDuplicateCard(null)} className="py-2 px-3 rounded-xl bg-slate-800 text-xs text-slate-300">
+                    İptal
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Kelime Ekleme Modalı (12 Alan) */}
+          {isVocabModalOpen && (
+            <VocabAddModal
+              initialWord={initialWord}
+              initialSentence={initialSentence}
+              onClose={() => setIsVocabModalOpen(false)}
+              onSave={(newCard) => {
+                setCards([newCard, ...cards]);
+                setIsVocabModalOpen(false);
+              }}
+            />
+          )}
+
+          {/* Metinden Otomatik Kelime Çıkarma */}
+          {autoVocabReadingId && readings.find(r => r.id === autoVocabReadingId) && (
+            <AutoVocabModal
+              reading={readings.find(r => r.id === autoVocabReadingId)}
+              cards={cards}
+              onClose={() => setAutoVocabReadingId(null)}
+              onAdd={(newCards, updated) => {
+                const upd = new Map(updated.map(c => [c.id, c]));
+                setCards([...newCards, ...cards.map(c => upd.get(c.id) || c)]);
+                const r = readings.find(x => x.id === autoVocabReadingId);
+                if (r) {
+                  const ids = new Set([...(r.savedWordIds || []), ...newCards.map(c => c.id), ...updated.map(c => c.id)]);
+                  setReadings(readings.map(x => x.id === r.id ? { ...x, savedWordIds: [...ids] } : x));
+                }
+                setAutoVocabReadingId(null);
+                // Eklenen kelimelerin kartlarını ayrı "Kelime Kartları" bölümünde göster
+                setRecentCardIds([...newCards.map(c => c.id), ...updated.map(c => c.id)]);
+                setSelectedReadingId(null);
+                setActiveTab('flashcards');
+                setToast(newCards.length + ' yeni kelime kartı oluşturuldu' + (updated.length ? ', ' + updated.length + ' mevcut kart güncellendi' : '') + '.');
+                setTimeout(() => setToast(''), 4000);
+              }}
+            />
+          )}
+
+          {toast && (
+            <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-bold shadow-2xl">
+              ✓ {toast}
+            </div>
+          )}
+
+          {/* Okuma Parçası Yükleme Modalı */}
+          {isUploadReadingOpen && (
+            <UploadModal
+              weeks={weeks}
+              onClose={() => setIsUploadReadingOpen(false)}
+              onSave={(saved) => {
+                const list = Array.isArray(saved) ? saved : [saved];
+                setReadings([...list, ...readings]);
+                setIsUploadReadingOpen(false);
+                // Tek metin kaydedildiyse onu aç, birden çok ise listeyi göster
+                setSelectedReadingId(list.length === 1 ? list[0].id : null);
+                setActiveTab('readings');
+              }}
+            />
+          )}
+
+          {/* Yeni Hafta Modalı */}
+          {isNewWeekOpen && (
+            <WeekAddModal
+              onClose={() => setIsNewWeekOpen(false)}
+              onSave={(newWeek) => {
+                setWeeks([newWeek, ...weeks]);
+                setIsNewWeekOpen(false);
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // --- YARDIMCI MODAL BİLEŞENLERİ ---
+    function DailyReviewSession({ cards, onComplete, onRate }) {
+      const [idx, setIdx] = useState(0);
+      const [revealed, setRevealed] = useState(false);
+      const card = cards[idx];
+
+      const handleRating = (rating) => {
+        onRate(card.id, rating);
+        setRevealed(false);
+        if (idx + 1 < cards.length) {
+          setIdx(idx + 1);
+        } else {
+          onComplete();
+        }
+      };
+
+      return (
+        <div className="bg-slate-950 p-8 rounded-3xl border border-slate-800 shadow-2xl text-center space-y-6">
+          <div className="text-xs text-slate-400 font-bold">Kart {idx + 1} / {cards.length}</div>
+          <div>
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{card.partOfSpeech}</span>
+            <h2 className="text-3xl font-black text-white mt-2">{card.english}</h2>
+            {card.ipa && <p className="text-xs text-slate-400 font-mono mt-1">/{card.ipa}/</p>}
+            {card.okunus && <p className="text-xs text-amber-300 mt-0.5">[{card.okunus}]</p>}
+            <button onClick={() => playWord(card)} className="mt-2 text-xs text-blue-400">🔊 Dinle</button>
+          </div>
+
+          {revealed ? (
+            <div className="space-y-4 pt-4 border-t border-slate-800">
+              <p className="text-2xl font-bold text-blue-400">{card.turkish}</p>
+              {card.originalSentence && (
+                <p className="text-xs text-slate-300 font-serif italic">"{card.originalSentence}"</p>
+              )}
+              {(card.examples || []).slice(0, 2).map((ex, i) => <p key={i} className="text-[11px] text-slate-400 font-serif">• {ex}</p>)}
+              {((card.synonyms || []).length > 0 || (card.antonyms || []).length > 0) && (
+                <div className="text-[11px] space-y-0.5">
+                  {(card.synonyms || []).length > 0 && <p><span className="text-slate-500">Eş anlamlı:</span> <span className="text-emerald-300">{card.synonyms.slice(0, 5).join(', ')}</span></p>}
+                  {(card.antonyms || []).length > 0 && <p><span className="text-slate-500">Zıt anlamlı:</span> <span className="text-red-300">{card.antonyms.slice(0, 4).join(', ')}</span></p>}
+                </div>
+              )}
+              <div className="grid grid-cols-4 gap-2 pt-2">
+                <button onClick={() => handleRating(1)} className="p-2.5 rounded-xl bg-red-950/60 border border-red-800 text-red-300 text-xs font-bold">Tekrar [1]</button>
+                <button onClick={() => handleRating(2)} className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800 text-amber-300 text-xs font-bold">Zor [2]</button>
+                <button onClick={() => handleRating(3)} className="p-2.5 rounded-xl bg-blue-950/60 border border-blue-800 text-blue-300 text-xs font-bold">İyi [3]</button>
+                <button onClick={() => handleRating(4)} className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-800 text-emerald-300 text-xs font-bold">Kolay [4]</button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setRevealed(true)} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-xs shadow-lg">
+              Anlamını Göster
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // Kelime Kartları bölümü: çevrilebilir kartlar, Tureng bağlantısı ve kart üzerinde anlam düzenleme
+    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete }) {
+      const [query, setQuery] = useState('');
+      const [autoFill, setAutoFill] = useState(null);     // { done, total } otomatik anlam bulma sürerken
+      const [refreshingId, setRefreshingId] = useState(null);
+
+      // Karta Türkçe anlamı otomatik getir (Wiktionary → MyMemory)
+      const lookupMeaning = async (c) => {
+        const r = await fetchTurkishAuto(c.lemma || c.english, c.partOfSpeech);
+        return r.meanings.length
+          ? { ...c, turkish: r.meanings.join(', '), trSenses: r.senses || [], trSource: r.source, updatedAt: new Date().toISOString() }
+          : null;
+      };
+      const fillMissing = async () => {
+        const targets = cards.filter(isMissingMeaning);
+        if (!targets.length) return;
+        setAutoFill({ done: 0, total: targets.length, found: 0 });
+        let found = 0;
+        const results = await runPool(targets, 3, async (c) => {
+          const u = await lookupMeaning(c);
+          if (u) found++;
+          return u;
+        }, (d, t) => setAutoFill({ done: d, total: t, found }));
+        onUpdateMany(results.filter(Boolean));
+        setAutoFill({ done: targets.length, total: targets.length, found: results.filter(Boolean).length, finished: true });
+        setTimeout(() => setAutoFill(null), 5000);
+      };
+      const refreshOne = async (c) => {
+        setRefreshingId(c.id);
+        try { const u = await lookupMeaning(c); if (u) onUpdate(u); } finally { setRefreshingId(null); }
+      };
+      const [filter, setFilter] = useState(recentIds && recentIds.length ? 'recent' : 'all');
+      const [flipped, setFlipped] = useState(() => new Set());
+      const [order, setOrder] = useState(null);           // karıştırılmış sıra (id listesi) ya da null
+      const [editingId, setEditingId] = useState(null);
+      const [editValue, setEditValue] = useState('');
+
+      useEffect(() => { if (recentIds && recentIds.length) setFilter('recent'); }, [recentIds]);
+
+      const recentSet = new Set(recentIds || []);
+      const readingTitles = [...new Set(cards.map(c => c.readingTitle).filter(Boolean))];
+      const q = query.trim().toLowerCase();
+      let list = cards.filter(c => {
+        if (filter === 'recent' && !recentSet.has(c.id)) return false;
+        if (filter === 'missing' && !isMissingMeaning(c)) return false;
+        if (filter.startsWith('r:') && c.readingTitle !== filter.slice(2)) return false;
+        if (q && !(c.english.toLowerCase().includes(q) || (c.turkish || '').toLowerCase().includes(q))) return false;
+        return true;
+      });
+      if (order) {
+        const pos = new Map(order.map((id, i) => [id, i]));
+        list = [...list].sort((a, b) => (pos.has(a.id) ? pos.get(a.id) : 1e9) - (pos.has(b.id) ? pos.get(b.id) : 1e9));
+      }
+
+      const toggle = (id) => setFlipped(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      const allFlipped = list.length > 0 && list.every(c => flipped.has(c.id));
+      const shuffle = () => {
+        const ids = cards.map(c => c.id);
+        for (let i = ids.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [ids[i], ids[j]] = [ids[j], ids[i]]; }
+        setOrder(ids); setFlipped(new Set());
+      };
+      const startEdit = (c) => { setEditingId(c.id); setEditValue(isMissingMeaning(c) ? '' : c.turkish); };
+      const saveEdit = (c) => {
+        const v = editValue.trim();
+        if (v) onUpdate({ ...c, turkish: v, updatedAt: new Date().toISOString() });
+        setEditingId(null);
+      };
+
+      const missingCount = cards.filter(isMissingMeaning).length;
+
+      return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-bold text-lg text-white mr-auto">Kelime Kartları ({list.length}{list.length !== cards.length ? ' / ' + cards.length : ''})</h3>
+            <input
+              type="search"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Kelime ara…"
+              aria-label="Kelime ara"
+              className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white w-40"
+            />
+            <select value={filter} onChange={e => setFilter(e.target.value)} aria-label="Kartları filtrele" className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white">
+              <option value="all">Tüm kartlar</option>
+              {recentIds && recentIds.length > 0 && <option value="recent">Son eklenenler ({recentIds.length})</option>}
+              <option value="missing">Anlamı eksik olanlar ({missingCount})</option>
+              {readingTitles.map(t => <option key={t} value={'r:' + t}>Metin: {t}</option>)}
+            </select>
+            <button onClick={shuffle} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">🔀 Karıştır</button>
+            <button
+              onClick={() => setFlipped(allFlipped ? new Set() : new Set(list.map(c => c.id)))}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200"
+            >
+              {allFlipped ? 'Ön yüzleri göster' : 'Tümünü çevir'}
+            </button>
+          </div>
+
+          {(missingCount > 0 || autoFill) && (
+            <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-amber-950/30 border border-amber-800/50">
+              {autoFill ? (
+                <p className="text-xs text-amber-200">
+                  {autoFill.finished
+                    ? '✓ ' + autoFill.found + ' kartın anlamı otomatik bulundu' + (autoFill.total - autoFill.found ? ', ' + (autoFill.total - autoFill.found) + ' kelime için kaynak bulunamadı.' : '.')
+                    : 'Anlamlar aranıyor… ' + autoFill.done + '/' + autoFill.total}
+                </p>
+              ) : (
+                <>
+                  <p className="text-xs text-amber-200">{missingCount} kartın Türkçe anlamı eksik.</p>
+                  <button onClick={fillMissing} className="px-3 py-1.5 rounded-lg bg-amber-600 text-xs font-bold text-white hover:bg-amber-500">
+                    ✨ Eksik anlamları otomatik bul
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          <p className="text-[11px] text-slate-500">
+            Karta tıklayınca çevrilir. Türkçe anlamlar otomatik gelir (Wiktionary, CC BY-SA). <span className="font-bold text-slate-300">↻</span> ile kartın anlamını yeniden getirebilir, <span className="text-red-300 font-bold">Tureng ↗</span> ile karşılaştırabilirsiniz.
+          </p>
+
+          {!cards.length ? (
+            <div className="text-center py-16 bg-slate-950 rounded-2xl border border-dashed border-slate-800 text-xs text-slate-400">
+              Henüz kart yok. Bir okuma metnini açıp <b>✨ Kelimeleri Çıkar</b> ile kelime ekleyin.
+            </div>
+          ) : !list.length ? (
+            <div className="text-center py-10 text-xs text-slate-400">Bu filtreye uyan kart yok.</div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              {list.map(c => {
+                const back = flipped.has(c.id);
+                const missing = isMissingMeaning(c);
+                return (
+                  <div key={c.id} className={"rounded-2xl border flex flex-col overflow-hidden " + (recentSet.has(c.id) ? "border-blue-600/50" : "border-slate-800") + (missing ? " ring-1 ring-amber-600/40" : "")}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(c.id)}
+                      aria-pressed={back}
+                      aria-label={c.english + (back ? ' kartının ön yüzünü göster' : ' kartını çevir')}
+                      className={"min-h-[11rem] p-4 text-left flex flex-col transition-colors " + (back ? "bg-slate-900" : "bg-slate-950 hover:bg-slate-900/60")}
+                    >
+                      {!back ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center gap-1">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{c.partOfSpeech}</span>
+                          <span className="text-2xl font-black text-white mt-1">{c.english}</span>
+                          {c.ipa && <span className="text-[11px] font-mono text-slate-400">/{c.ipa}/</span>}
+                          {c.okunus && <span className="text-xs text-amber-300">[{c.okunus}]</span>}
+                          <span className="text-[10px] text-slate-600 mt-2">çevirmek için tıklayın</span>
+                        </div>
+                      ) : (
+                        <div className="flex-1 space-y-1.5">
+                          <p className={"text-lg font-black " + (missing ? "text-amber-400" : "text-blue-300")}>{missing ? 'Anlam eksik — "Eksik anlamları otomatik bul" düğmesini kullanın' : c.turkish}</p>
+                          {(c.trSenses || []).length > 1 && (
+                            <div className="space-y-0.5">
+                              {c.trSenses.slice(0, 3).map((s, i) => (
+                                <p key={i} className="text-[10px] text-slate-400">
+                                  {s.pos && <span className="text-slate-500">({s.pos}) </span>}
+                                  {s.sense && <span className="italic">{s.sense}: </span>}
+                                  <span className="text-blue-200">{s.words.join(', ')}</span>
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                          {c.definition && <p className="text-[11px] text-slate-400"><span className="text-slate-500">EN:</span> {c.definition}</p>}
+                          {c.originalSentence && <p className="text-[11px] text-slate-300 font-serif italic line-clamp-3">“{c.originalSentence}”</p>}
+                          {(c.examples || [])[0] && <p className="text-[11px] text-slate-400 font-serif line-clamp-2">• {c.examples[0]}</p>}
+                          {(c.synonyms || []).length > 0 && <p className="text-[11px]"><span className="text-slate-500">Eş:</span> <span className="text-emerald-300">{c.synonyms.slice(0, 4).join(', ')}</span></p>}
+                          {(c.antonyms || []).length > 0 && <p className="text-[11px]"><span className="text-slate-500">Zıt:</span> <span className="text-red-300">{c.antonyms.slice(0, 3).join(', ')}</span></p>}
+                        </div>
+                      )}
+                    </button>
+
+                    {editingId === c.id ? (
+                      <form onSubmit={e => { e.preventDefault(); saveEdit(c); }} className="flex items-center gap-1.5 p-2 bg-slate-900 border-t border-slate-800">
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editValue}
+                          onChange={e => setEditValue(e.target.value)}
+                          placeholder="Türkçe anlamı yapıştırın/yazın"
+                          aria-label={c.english + ' Türkçe anlamı'}
+                          className="flex-1 min-w-0 px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-xs text-white"
+                        />
+                        <button type="submit" className="px-2.5 py-1 rounded-md bg-blue-600 text-[11px] font-bold text-white">Kaydet</button>
+                        <button type="button" onClick={() => setEditingId(null)} className="px-2 py-1 rounded-md bg-slate-800 text-[11px] text-slate-300">İptal</button>
+                      </form>
+                    ) : (
+                      <div className="flex flex-wrap items-center gap-1.5 p-2 bg-slate-900/70 border-t border-slate-800">
+                        <button onClick={() => playWord(c)} aria-label={c.english + ' telaffuzunu dinle'} className="px-2 py-1 rounded-md text-xs text-blue-400 hover:bg-slate-800">🔊</button>
+                        <TurengLink word={c.lemma || c.english} />
+                        <button
+                          onClick={() => refreshOne(c)}
+                          disabled={refreshingId === c.id}
+                          title="Türkçe anlamı otomatik yeniden getir"
+                          aria-label={c.english + ' anlamını otomatik yeniden getir'}
+                          className={"px-2 py-1 rounded-md text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-50 " + (refreshingId === c.id ? 'animate-spin' : '')}
+                        >↻</button>
+                        {c.trSource && <span className="text-[9px] text-slate-600">{c.trSource}</span>}
+                        <button onClick={() => startEdit(c)} className={"ml-auto px-2 py-1 rounded-md text-[11px] font-bold " + (missing ? "bg-amber-600 text-white" : "text-slate-300 hover:bg-slate-800")}>
+                          ✎ Anlam{missing ? ' ekle' : ''}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (window.confirm('"' + c.english + '" kartı silinsin mi? Kelime, Kelime Bankası ve Günlük Tekrar\'dan da kaldırılır. Bu işlem geri alınamaz.')) onDelete(c.id);
+                          }}
+                          title="Kartı sil"
+                          aria-label={c.english + ' kartını sil'}
+                          className="px-2 py-1 rounded-md text-[11px] font-bold text-red-400 hover:bg-red-600 hover:text-white transition"
+                        >
+                          🗑 Sil
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Okuma metninden kelimeleri otomatik çıkarır, anlam/okunuş/örnek/eş-zıt anlamları getirir ve bankaya ekler
+    function AutoVocabModal({ reading, cards, onClose, onAdd }) {
+      const [level, setLevel] = useState('120');   // en yüksek sıklık (milyonda); düşük = daha zor kelimeler
+      const [limit, setLimit] = useState(30);
+      const [phase, setPhase] = useState('idle');  // idle | scanning | details | done | error
+      const [progress, setProgress] = useState({ done: 0, total: 0 });
+      const [items, setItems] = useState([]);
+      const [errorMsg, setErrorMsg] = useState('');
+      const [quotaHit, setQuotaHit] = useState(false);
+      const runId = useRef(0);
+
+      const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z\s-]/g, '').trim();
+      const existing = new Map(cards.map(c => [norm(c.lemma || c.english), c]));
+
+      const start = async () => {
+        const my = ++runId.current;
+        setPhase('scanning'); setItems([]); setErrorMsg(''); setQuotaHit(false);
+        setProgress({ done: 0, total: 0 });
+        try {
+          const cands = await extractCandidates(reading.content, {
+            maxFreq: parseFloat(level),
+            onProgress: (d, t) => { if (runId.current === my) setProgress({ done: d, total: t }); },
+          });
+          if (runId.current !== my) return;
+          if (!cands.length) { setPhase('done'); return; }
+          // Bankada olmayanlar önce; aralarında daha az yaygın (daha "akademik") olanlar önce
+          cands.sort((a, b) => (existing.has(a.lemma) - existing.has(b.lemma)) || (a.freq - b.freq));
+          const chosen = cands.slice(0, limit);
+          setItems(chosen.map(c => ({ ...c, checked: !existing.has(c.lemma), loading: true })));
+          setPhase('details');
+          setProgress({ done: 0, total: chosen.length });
+          await runPool(chosen, 3, async (c) => {
+            const d = await fetchWordDetails(c.lemma, c.pos);
+            if (runId.current !== my) return;
+            if (d.trQuota) setQuotaHit(true);
+            setItems(prev => prev.map(x => x.lemma === c.lemma ? { ...x, ...d, loading: false } : x));
+          }, (d, t) => { if (runId.current === my) setProgress({ done: d, total: t }); });
+          if (runId.current !== my) return;
+          setItems(prev => prev.map(x => x.loading ? { ...x, loading: false, failed: true } : x));
+          setPhase('done');
+        } catch (e) {
+          if (runId.current !== my) return;
+          setErrorMsg('Kelimeler alınamadı: ' + (e && e.message ? e.message : 'bağlantı hatası') + '. İnternet bağlantınızı kontrol edip tekrar deneyin.');
+          setPhase('error');
+        }
+      };
+
+      // Pencere açılınca otomatik başlat
+      useEffect(() => { start(); return () => { runId.current++; }; }, []);
+
+      const update = (lemma, patch) => setItems(prev => prev.map(x => x.lemma === lemma ? { ...x, ...patch } : x));
+      const selected = items.filter(x => x.checked && !x.loading);
+      const allChecked = items.length > 0 && items.every(x => x.checked);
+
+      const handleAdd = () => {
+        const now = new Date().toISOString();
+        const newCards = [], updated = [];
+        selected.forEach((x, i) => {
+          const source = { readingId: reading.id, readingTitle: reading.title, weekId: reading.weekId, sentence: x.sentence, dateAdded: now };
+          const fields = {
+            turkish: (x.turkish || '').trim(),
+            trSenses: x.trSenses || [],
+            trSource: x.trSource || '',
+            ipa: x.ipa || '',
+            okunus: x.okunus || '',
+            audioUrl: x.audioUrl || '',
+            definition: x.definition || '',
+            examples: x.examples || [],
+            synonyms: x.synonyms || [],
+            antonyms: x.antonyms || [],
+          };
+          const dup = existing.get(x.lemma);
+          if (dup) {
+            // Mevcut karta: yeni kaynak cümle + eksik alanları tamamla
+            const filled = {};
+            Object.keys(fields).forEach(k => {
+              const cur = dup[k];
+              if (cur == null || cur === '' || (Array.isArray(cur) && !cur.length)) filled[k] = fields[k];
+            });
+            const sources = (dup.sources || []).filter(s => !(s.readingId === reading.id && s.sentence === x.sentence)).concat([source]);
+            updated.push({ ...dup, ...filled, sources, updatedAt: now });
+          } else {
+            const id = 'card_' + Date.now() + '_' + i;
+            newCards.push({
+              id,
+              english: x.lemma,
+              lemma: x.lemma,
+              ...fields,
+              turkish: fields.turkish || '(anlam bulunamadı – düzenleyin)',
+              partOfSpeech: x.partOfSpeech || x.pos || 'noun',
+              originalSentence: x.sentence,
+              readingId: reading.id,
+              readingTitle: reading.title,
+              weekId: reading.weekId,
+              sources: [source],
+              sourceType: 'user_reading',
+              isDifficult: false,
+              srs: createSRS(id),
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+        });
+        onAdd(newCards, updated);
+      };
+
+      const chip = (t, cls) => <span key={t} className={"inline-block px-2 py-0.5 rounded-full text-[10px] mr-1 mb-1 " + cls}>{t}</span>;
+      const highlight = (sentence, forms) => {
+        if (!sentence) return null;
+        const re = new RegExp('\\b(' + forms.map(f => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')\\b', 'gi');
+        return sentence.split(re).map((part, i) => i % 2 ? <mark key={i} className="bg-blue-500/30 text-white rounded px-0.5">{part}</mark> : part);
+      };
+      const busy = phase === 'scanning' || phase === 'details';
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col">
+            <div className="p-5 border-b border-slate-800 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-base text-white">✨ Metinden Kelime Çıkar</h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5 truncate">{reading.title}</p>
+                </div>
+                <button onClick={onClose} aria-label="Kapat" className="px-2 py-1 rounded-lg text-slate-400 hover:bg-slate-800">✕</button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <label className="text-slate-400">Seviye</label>
+                <select value={level} onChange={e => setLevel(e.target.value)} disabled={busy} className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white">
+                  <option value="400">Tümü (yaygın kelimeler dahil)</option>
+                  <option value="120">Orta ve üstü (önerilen)</option>
+                  <option value="30">İleri</option>
+                </select>
+                <label className="text-slate-400 ml-2">En fazla</label>
+                <select value={limit} onChange={e => setLimit(+e.target.value)} disabled={busy} className="px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white">
+                  {[15, 30, 50, 80].map(n => <option key={n} value={n}>{n} kelime</option>)}
+                </select>
+                <button onClick={start} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-slate-800 text-slate-200 font-bold disabled:opacity-50">↻ Yeniden çıkar</button>
+              </div>
+              {busy && (
+                <div className="space-y-1">
+                  <div className="h-1.5 rounded bg-slate-800 overflow-hidden">
+                    <div className="h-full bg-blue-500 transition-all" style={{ width: (progress.total ? Math.round(progress.done / progress.total * 100) : 5) + '%' }} />
+                  </div>
+                  <p className="text-[11px] text-blue-300">
+                    {phase === 'scanning' ? 'Metindeki kelimeler taranıyor' : 'Anlamlar, okunuşlar ve örnekler getiriliyor'} · {progress.done}/{progress.total || '…'}
+                  </p>
+                </div>
+              )}
+              {quotaHit && <p className="text-[11px] text-amber-400">Çeviri servisinin günlük ücretsiz kotası doldu; bazı Türkçe anlamlar boş kaldı. Elle yazabilir veya yarın tekrar deneyebilirsiniz.</p>}
+              {errorMsg && <p className="text-[11px] text-red-400">{errorMsg}</p>}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {phase === 'done' && !items.length && (
+                <p className="text-center text-xs text-slate-400 py-10">Bu seviyede öğrenilecek kelime bulunamadı. Seviyeyi "Tümü" yapıp tekrar deneyin.</p>
+              )}
+              {items.length > 0 && (
+                <label className="flex items-center gap-2 text-[11px] text-slate-400 px-1 pb-1 cursor-pointer select-none">
+                  <input type="checkbox" checked={allChecked} onChange={e => setItems(prev => prev.map(x => ({ ...x, checked: e.target.checked })))} className="accent-blue-500" />
+                  Tümünü seç ({items.length} kelime bulundu)
+                </label>
+              )}
+              {items.map(x => {
+                const lvl = freqLevel(x.freq);
+                const inBank = existing.has(x.lemma);
+                return (
+                  <div key={x.lemma} className={"rounded-xl border p-3 transition " + (x.checked ? "border-blue-600/60 bg-slate-950" : "border-slate-800 bg-slate-950/50 opacity-70")}>
+                    <div className="flex items-start gap-3">
+                      <input type="checkbox" checked={x.checked} onChange={e => update(x.lemma, { checked: e.target.checked })} aria-label={x.lemma + ' kelimesini seç'} className="mt-1 accent-blue-500" />
+                      <div className="flex-1 min-w-0 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-black text-white text-base">{x.lemma}</span>
+                          <button type="button" onClick={() => playWord({ english: x.lemma, audioUrl: x.audioUrl })} aria-label={x.lemma + ' telaffuzunu dinle'} className="text-xs text-blue-400 hover:text-blue-300">🔊</button>
+                          {x.ipa && <span className="text-[11px] font-mono text-slate-400">/{x.ipa}/</span>}
+                          {x.okunus && <span className="text-[11px] text-amber-300" title="Türkçe harflerle okunuş (büyük harfli hece vurgulu)">[{x.okunus}]</span>}
+                          {x.partOfSpeech && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{x.partOfSpeech}</span>}
+                          <span className={"text-[10px] font-bold px-1.5 py-0.5 rounded " + lvl.cls}>{lvl.label}</span>
+                          <span className="text-[10px] text-slate-500">metinde {x.count}×</span>
+                          {inBank && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300">Bankada var</span>}
+                        </div>
+                        {x.loading ? (
+                          <p className="text-[11px] text-slate-500">Bilgiler getiriliyor…</p>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={x.turkish || ''}
+                                onChange={e => update(x.lemma, { turkish: e.target.value })}
+                                placeholder="Türkçe anlamı (bulunamadı, yazabilirsiniz)"
+                                className="flex-1 min-w-0 px-2 py-1 rounded-md bg-slate-800 border border-slate-700 text-xs font-semibold text-blue-300"
+                              />
+                              <TurengLink word={x.lemma} />
+                            </div>
+                            {x.trSource && <p className="text-[10px] text-slate-500 -mt-0.5">Türkçe anlam kaynağı: {x.trSource}</p>}
+                            {x.definition && <p className="text-[11px] text-slate-400"><span className="text-slate-500">EN:</span> {x.definition}</p>}
+                            {x.sentence && <p className="text-[11px] text-slate-300 font-serif italic">“{highlight(x.sentence, x.forms)}”</p>}
+                            {(x.examples || []).map((ex, i) => <p key={i} className="text-[11px] text-slate-400 font-serif">• {ex}</p>)}
+                            {(x.synonyms || []).length > 0 && <div className="text-[11px]"><span className="text-slate-500 mr-1">Eş anlamlı:</span>{x.synonyms.map(s => chip(s, 'bg-emerald-950 text-emerald-300'))}</div>}
+                            {(x.antonyms || []).length > 0 && <div className="text-[11px]"><span className="text-slate-500 mr-1">Zıt anlamlı:</span>{x.antonyms.map(s => chip(s, 'bg-red-950 text-red-300'))}</div>}
+                            {x.failed && <p className="text-[11px] text-amber-400">Bilgiler alınamadı; yine de ekleyip sonra düzenleyebilirsiniz.</p>}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-4 border-t border-slate-800 flex items-center justify-between gap-2">
+              <p className="text-[10px] text-slate-500">Türkçe anlamlar: Wiktionary (CC BY-SA), yoksa MyMemory · Okunuş/örnek: dictionaryapi.dev, Datamuse</p>
+              <div className="flex gap-2">
+                <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">Kapat</button>
+                <button onClick={handleAdd} disabled={!selected.length} className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white disabled:opacity-50">
+                  {selected.length ? selected.length + ' Kelimeyi Bankaya Ekle' : 'Kelime seçin'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function VocabAddModal({ initialWord, initialSentence, onClose, onSave }) {
+      const [english, setEnglish] = useState(initialWord);
+      const [turkish, setTurkish] = useState('');
+      const [pos, setPos] = useState('noun');
+      const [sentence, setSentence] = useState(initialSentence);
+
+      // --- Otomatik anlam: kelime yazılınca Türkçe anlam, tür, okunuş, örnek, eş/zıt anlamlılar kendiliğinden gelir ---
+      const [info, setInfo] = useState(null);             // { lemma, ipa, okunus, audioUrl, definition, examples, synonyms, antonyms, trSenses, trSource }
+      const [lookup, setLookup] = useState('idle');       // idle | loading | found | notfound | error
+      const turkishTouched = useRef(false);               // kullanıcı anlamı kendisi değiştirdiyse üzerine yazma
+      const posTouched = useRef(false);
+      const reqId = useRef(0);
+
+      const runLookup = async (text, wantPos) => {
+        const my = ++reqId.current;
+        const raw = text.trim().toLowerCase();
+        if (raw.length < 2) { setLookup('idle'); setInfo(null); return; }
+        setLookup('loading');
+        try {
+          let lemma = raw, guessPos = wantPos;
+          if (/^[a-z][a-z'’-]*$/.test(raw)) {
+            const r = await resolveLemma(raw).catch(() => null);
+            if (r) {
+              lemma = r.word;
+              if (!wantPos) guessPos = posFor(lemma, [raw], r.info.tags);
+            }
+          }
+          const usePos = wantPos || guessPos || 'noun';
+          const d = await fetchWordDetails(lemma, usePos);
+          if (my !== reqId.current) return;                // daha yeni bir arama başladı
+          setInfo({ ...d, lemma });
+          if (!posTouched.current && ['noun', 'verb', 'adjective', 'adverb'].includes(d.partOfSpeech || usePos)) setPos(d.partOfSpeech || usePos);
+          if (!turkishTouched.current) setTurkish(d.turkish || '');
+          setLookup(d.turkish ? 'found' : 'notfound');
+        } catch (e) {
+          if (my !== reqId.current) return;
+          setLookup('error');
+        }
+      };
+
+      // Yazmayı bırakınca (0,6 sn) otomatik ara
+      useEffect(() => {
+        const t = setTimeout(() => runLookup(english, posTouched.current ? pos : null), 600);
+        return () => clearTimeout(t);
+      }, [english]);
+
+      const onPosChange = (v) => {
+        posTouched.current = true;
+        setPos(v);
+        if (['noun', 'verb', 'adjective', 'adverb'].includes(v) && english.trim()) runLookup(english, v);   // türe uygun anlamı yeniden getir
+      };
+
+      const handleSave = (e) => {
+        e.preventDefault();
+        if (!english.trim()) return;
+        const newId = 'card_' + Date.now();
+        const now = new Date().toISOString();
+        // Tek kelimede kök hâli kaydedilir ("defects" → "defect"); ifadeler yazıldığı gibi kalır
+        const typed = english.trim();
+        const isSingle = /^[A-Za-z][A-Za-z'’-]*$/.test(typed);
+        onSave({
+          id: newId,
+          english: isSingle && info && info.lemma ? info.lemma : typed,
+          lemma: info && info.lemma || typed.toLowerCase(),
+          turkish: turkish.trim() || '(anlam bulunamadı – düzenleyin)',
+          trSenses: info && info.trSenses || [],
+          trSource: turkishTouched.current ? 'Elle' : (info && info.trSource || ''),
+          ipa: info && info.ipa || '',
+          okunus: info && info.okunus || '',
+          audioUrl: info && info.audioUrl || '',
+          definition: info && info.definition || '',
+          examples: info && info.examples || [],
+          synonyms: info && info.synonyms || [],
+          antonyms: info && info.antonyms || [],
+          partOfSpeech: pos,
+          originalSentence: sentence.trim(),
+          sourceType: 'user_reading',
+          isDifficult: false,
+          srs: createSRS(newId),
+          createdAt: now,
+          updatedAt: now,
+        });
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={handleSave} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-md w-full space-y-3 max-h-[92vh] overflow-y-auto">
+            <h3 className="font-bold text-base text-white">Kelime Kartı Ekle</h3>
+            <input
+              type="text"
+              autoFocus={!initialWord}
+              placeholder="İngilizce kelime/ifade (anlamı otomatik gelir)"
+              aria-label="İngilizce kelime veya ifade"
+              value={english}
+              onChange={e => setEnglish(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+            />
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder={lookup === 'loading' ? 'Anlam aranıyor…' : 'Türkçe anlamı (otomatik)'}
+                  aria-label="Türkçe anlamı"
+                  value={turkish}
+                  onChange={e => { turkishTouched.current = true; setTurkish(e.target.value); }}
+                  className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs font-semibold text-blue-300"
+                />
+                {english.trim() && <TurengLink word={(info && info.lemma) || english} />}
+              </div>
+              <p role="status" className={"text-[10px] " + ({ loading: 'text-blue-300', found: 'text-emerald-400', notfound: 'text-amber-400', error: 'text-red-400' }[lookup] || 'text-slate-500')}>
+                {lookup === 'loading' && 'Anlam, okunuş ve örnekler aranıyor…'}
+                {lookup === 'found' && '✓ Anlam otomatik bulundu' + (info && info.trSource ? ' (' + info.trSource + ')' : '') + (info && info.lemma && info.lemma !== english.trim().toLowerCase() ? ' · kök: ' + info.lemma : '')}
+                {lookup === 'notfound' && 'Otomatik anlam bulunamadı; yine de kaydedebilirsiniz (Kelime Kartları\'nda tekrar denenebilir).'}
+                {lookup === 'error' && 'Bağlantı hatası; internetinizi kontrol edin.'}
+                {lookup === 'idle' && 'Kelimeyi yazın, anlamı kendiliğinden gelecek.'}
+              </p>
+              {turkishTouched.current && lookup === 'found' && info && info.turkish && info.turkish !== turkish && (
+                <button type="button" onClick={() => { turkishTouched.current = false; setTurkish(info.turkish); }} className="text-[10px] text-blue-400 underline">
+                  Otomatik anlamı geri getir: {info.turkish}
+                </button>
+              )}
+            </div>
+
+            {info && (info.ipa || info.okunus || (info.synonyms || []).length || (info.trSenses || []).length > 1) && (
+              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1 text-[11px]">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => playWord({ english: info.lemma || english, audioUrl: info.audioUrl })} aria-label="Telaffuzu dinle" className="text-blue-400">🔊</button>
+                  {info.ipa && <span className="font-mono text-slate-400">/{info.ipa}/</span>}
+                  {info.okunus && <span className="text-amber-300">[{info.okunus}]</span>}
+                </div>
+                {(info.trSenses || []).length > 1 && info.trSenses.slice(0, 3).map((s, i) => (
+                  <p key={i} className="text-slate-400">
+                    {s.pos && <span className="text-slate-500">({s.pos}) </span>}{s.sense && <span className="italic">{s.sense}: </span>}
+                    <button type="button" onClick={() => { turkishTouched.current = true; setTurkish(s.words.join(', ')); }} className="text-blue-200 hover:underline" title="Bu anlamı kullan">{s.words.join(', ')}</button>
+                  </p>
+                ))}
+                {info.definition && <p className="text-slate-400"><span className="text-slate-500">EN:</span> {info.definition}</p>}
+                {(info.examples || [])[0] && <p className="text-slate-400 font-serif">• {info.examples[0]}</p>}
+                {(info.synonyms || []).length > 0 && <p><span className="text-slate-500">Eş:</span> <span className="text-emerald-300">{info.synonyms.slice(0, 5).join(', ')}</span></p>}
+                {(info.antonyms || []).length > 0 && <p><span className="text-slate-500">Zıt:</span> <span className="text-red-300">{info.antonyms.slice(0, 4).join(', ')}</span></p>}
+              </div>
+            )}
+
+            <select
+              value={pos}
+              onChange={e => onPosChange(e.target.value)}
+              aria-label="Kelime türü"
+              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+            >
+              <option value="noun">İsim (Noun)</option>
+              <option value="verb">Fiil (Verb)</option>
+              <option value="adjective">Sıfat (Adjective)</option>
+              <option value="adverb">Zarf (Adverb)</option>
+              <option value="collocation">Kalıp İfade (Collocation)</option>
+              <option value="prepositional_phrase">Edatlı Yapı</option>
+            </select>
+            <textarea
+              rows={3}
+              placeholder="Metindeki orijinal cümle"
+              value={sentence}
+              onChange={e => setSentence(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-serif"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              <button type="submit" disabled={!english.trim()} className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white disabled:opacity-50">Kaydet</button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    function UploadModal({ weeks, onClose, onSave }) {
+      const [title, setTitle] = useState('');
+      const [content, setContent] = useState('');
+      const [weekId, setWeekId] = useState(weeks[0]?.id || '');
+      const [category, setCategory] = useState('Fen Bilimleri');
+      const [fileType, setFileType] = useState('manual');
+      const [fileStatus, setFileStatus] = useState('');
+      const [isReadingFile, setIsReadingFile] = useState(false);
+      const [forceOcr, setForceOcr] = useState(false);
+
+      // --- OCR (resimdeki yazıları okuma) ---
+      // Tek bir Tesseract worker'ı açılır, dosya bitince kapatılır.
+      const ocrRef = useRef(null);
+      const getOcrWorker = async () => {
+        if (!window.Tesseract) throw new Error('Resim okuyucu (OCR) yüklenemedi (internet bağlantısını kontrol edin).');
+        if (!ocrRef.current) {
+          setFileStatus('Resim okuyucu hazırlanıyor (ilk seferde biraz sürebilir)...');
+          ocrRef.current = await Tesseract.createWorker('eng');
+        }
+        return ocrRef.current;
+      };
+      const closeOcrWorker = async () => {
+        if (ocrRef.current) { try { await ocrRef.current.terminate(); } catch (e) {} ocrRef.current = null; }
+      };
+      useEffect(() => () => { closeOcrWorker(); }, []);
+
+      const ocrImage = async (image, label) => {
+        const worker = await getOcrWorker();
+        setFileStatus(label + ' okunuyor (OCR)...');
+        // Görüntüyü canvas'a çevir: başlık satırlarını kesip yeniden okuyabilmek için gerekli
+        let canvas = image;
+        if (!(image instanceof HTMLCanvasElement)) {
+          try {
+            const bmp = await createImageBitmap(image instanceof Blob ? image : await (await fetch(image)).blob());
+            canvas = document.createElement('canvas');
+            canvas.width = bmp.width; canvas.height = bmp.height;
+            canvas.getContext('2d').drawImage(bmp, 0, 0);
+            canvas = upscaleForOcr(canvas);
+          } catch (e) { canvas = null; }
+        }
+        const { data } = await worker.recognize(canvas || image, {}, { text: true, blocks: true });
+        if (!data || !Array.isArray(data.blocks) || !data.blocks.length) return cleanOcrText(data && data.text ? data.text : '');
+        return structureOcr(data.blocks, canvas, worker);
+      };
+
+      // Bir parça metni filtreleyip temiz kelimelere çevirir
+      const filterWords = (words) => words
+        .filter(w => isPlausibleWord(w.text, w.confidence))
+        .map(w => ({ w, t: cleanWordText(w.text) }))
+        .filter(p => p.t);
+
+      // Başlık satırını görüntüden kesip büyüterek yeniden okur (büyük/süslü yazılarda daha doğru sonuç verir)
+      const reocrLine = async (canvas, bbox, worker) => {
+        const pad = Math.round((bbox.y1 - bbox.y0) * 0.3);
+        const x = Math.max(0, bbox.x0 - pad), y = Math.max(0, bbox.y0 - pad);
+        const w = Math.min(canvas.width - x, bbox.x1 - bbox.x0 + 2 * pad);
+        const h = Math.min(canvas.height - y, bbox.y1 - bbox.y0 + 2 * pad);
+        const empty = { text: '', avgConf: 0, n: 0 };
+        if (w < 10 || h < 10) return empty;
+        const crop = document.createElement('canvas');
+        crop.width = w * 2; crop.height = h * 2;
+        const cctx = crop.getContext('2d');
+        cctx.fillStyle = '#fff'; cctx.fillRect(0, 0, crop.width, crop.height);
+        cctx.imageSmoothingQuality = 'high';
+        cctx.drawImage(canvas, x, y, w, h, 0, 0, crop.width, crop.height);
+
+        // Başlıklar çoğu zaman koyu/noktalı zemin üzerinde beyaz yazıdır. Birkaç ön işleme denenir, en güvenilir sonuç seçilir:
+        // olduğu gibi · bulanıklaştır + siyah-beyaz + ters çevir (koyu zeminli başlık) · bulanıklaştır + siyah-beyaz (açık zemin)
+        const variants = [
+          null,
+          { blur: 3, invert: true }, { blur: 4, invert: true },
+          { blur: 2, invert: false },
+        ];
+        let best = empty;
+        try {
+          await worker.setParameters({ tessedit_pageseg_mode: '7' });                    // tek satır modu
+          for (const v of variants) {
+            const img = v ? binarize(crop, v.blur, v.invert) : crop;
+            const { data } = await worker.recognize(img, {}, { text: true, blocks: true });
+            const words = [];
+            (data && data.blocks || []).forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach(l => words.push(...(l.words || [])))));
+            const kept = filterWords(words).filter(p => p.w.confidence >= 50);          // başlıkta yalnızca emin olunan kelimeler
+            const score = kept.reduce((s, p) => s + p.w.confidence, 0);
+            if (score > (best.score || 0)) {
+              best = { text: kept.map(p => p.t).join(' ').trim(), avgConf: score / kept.length, n: kept.length, score };
+            }
+          }
+        } finally {
+          await worker.setParameters({ tessedit_pageseg_mode: '6' });                    // tesseract.js varsayılanı
+        }
+        return best;
+      };
+
+      // Gri ton + bulanıklaştırma (tram/nokta desenini yok eder) + Otsu eşiği ile siyah-beyaz; istenirse renkleri ters çevirir
+      const binarize = (src, blur, invert) => {
+        const c = document.createElement('canvas');
+        c.width = src.width; c.height = src.height;
+        const g = c.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.filter = blur ? 'blur(' + blur + 'px)' : 'none';
+        g.drawImage(src, 0, 0);
+        g.filter = 'none';
+        const id = g.getImageData(0, 0, c.width, c.height), d = id.data, n = d.length / 4;
+        const gray = new Uint8Array(n), hist = new Array(256).fill(0);
+        for (let i = 0; i < n; i++) { const v = (d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114) | 0; gray[i] = v; hist[v]++; }
+        let sumAll = 0; for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+        let sB = 0, wB = 0, bestVar = 0, thr = 128;
+        for (let t = 0; t < 256; t++) {
+          wB += hist[t]; if (!wB) continue;
+          const wF = n - wB; if (!wF) break;
+          sB += t * hist[t];
+          const diff = sB / wB - (sumAll - sB) / wF, v = wB * wF * diff * diff;
+          if (v > bestVar) { bestVar = v; thr = t; }
+        }
+        for (let i = 0; i < n; i++) {
+          let v = gray[i] < thr ? 0 : 255;
+          if (invert) v = 255 - v;
+          d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255;
+        }
+        g.putImageData(id, 0, 0);
+        return c;
+      };
+
+      // Yeni okumadaki rakamlar ilk okumayla aynı uzunluktaysa ilk okumanın rakamlarını koru
+      // (tam çözünürlükteki ilk okuma rakamlarda genelde daha doğrudur: "1899 1961" ↔ "1999-1361")
+      const keepOriginalDigits = (fresh, orig) => {
+        const od = (orig.match(/\d/g) || []).join('');
+        const fd = (fresh.match(/\d/g) || []).join('');
+        if (!od || od.length !== fd.length || od === fd) return fresh;
+        let k = 0;
+        return fresh.replace(/\d/g, () => od[k++]);
+      };
+
+      // --- OCR çıktısını temizleme ve yapılandırma ---
+      // Geçerli 2 harfli İngilizce kelimeler (geri kalan 2 harfli parçalar çoğunlukla tarama lekesidir)
+      const VALID_2 = new Set('am an as at be by do go he hi if in is it me my no of oh ok on or so to up us we ad ex id vs'.split(' '));
+
+      // OCR'ın bulduğu bir parçanın gerçek kelime olup olmadığını tahmin eder.
+      // Gerçek kelimeler bazen düşük güven puanı alabildiği için yalnızca puana değil, biçimine de bakılır.
+      const isPlausibleWord = (text, conf) => {
+        if (/^[^A-Za-z0-9]+$/.test(text)) return /^[&—–]$/.test(text) && conf >= 80; // ~ * | © + : gibi tek başına semboller
+        if (conf >= 85) return true;
+        const core = text
+          .replace(/^[“”‘’"'(\[~*•+|\-]+/, '')
+          .replace(/[“”‘’"')\].,;:!?|]+$/, '');
+        if (!core) return false;
+        if (/^\d[\d.,%\-–/]*(s|st|nd|rd|th)?$/i.test(core)) return true;            // 1950s, 20%, 1899-1961
+        if (/^[A-Za-z]+\.[A-Za-z]+$/.test(core)) return core.split('.').every(p => isPlausibleWord(p, conf)); // "a.shelf" → "a shelf"
+        const parts = core.split(/['’\-]/);
+        if (!parts.every(p => /^[A-Za-z]+$/.test(p))) return false;
+        const letters = parts.join('');
+        if (letters.length === 1) return /^[aAI]$/.test(letters);
+        if (/(.)\1\1/i.test(letters)) return false;                                   // "iii", "LLL"
+        const isCaps = letters === letters.toUpperCase();
+        if (!parts.every(p => !p || p === p.toUpperCase() || /^[A-Za-z][a-z]*$/.test(p))) return false; // "dE" gibi karışık harf
+        if (isCaps && conf < 60) return false;                                        // "TE ES GTS"
+        if (letters.length === 2) return VALID_2.has(letters.toLowerCase());
+        return /[aeiouy]/i.test(letters);
+      };
+
+      // Kelimenin başındaki tarama artıklarını (~ * • + | -) atar
+      const cleanWordText = (t) => t
+        .replace(/^[~*•+|¦]+/, '').replace(/^-+(?=[A-Za-z])/, '').replace(/[|¦]+$/, '')
+        .replace(/^([A-Za-z]+)\.([a-z]+)$/, '$1 $2');                                  // "a.shelf" → "a shelf"
+
+      const median = (arr) => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : 0; };
+
+      const structureOcr = async (blocks, canvas, worker) => {
+        const lines = [];
+        blocks.forEach(b => (b.paragraphs || []).forEach(p => (p.lines || []).forEach((l, li) => {
+          const pairs = filterWords(l.words || []);
+          if (!pairs.length) return;
+          const parts = pairs.map(p => p.t);
+          const kept = pairs.map(p => p.w);
+          // Satır başındaki eşi olmayan tırnak işareti genellikle lekedir
+          const rest = parts.join(' ').slice(1);
+          if (/^[“"]/.test(parts[0]) && !/[”"]/.test(rest)) parts[0] = parts[0].replace(/^[“"]+/, '');
+          if (/^[‘']/.test(parts[0]) && !/[’'](?![A-Za-z])/.test(rest)) parts[0] = parts[0].replace(/^[‘']+/, '');
+          const realWords = parts.join(' ').split(' ').filter(t => /[A-Za-z]{3,}/.test(t)).length;
+          lines.push({
+            lowConf: l.confidence < 40,
+            realWords,
+            bbox: l.bbox,
+            // Yeniden okuma için sağ sınır: makul güvenli son kelime (çok düşük puanlı süs parçaları hariç)
+            cx1: (kept.filter(w => w.confidence >= 25).pop() || kept[kept.length - 1]).bbox.x1,
+            text: parts.join(' ').trim(),
+            h: l.bbox.y1 - l.bbox.y0,
+            x0: kept[0].bbox.x0,
+            x1: kept[kept.length - 1].bbox.x1,
+            n: parts.length,
+            paraStart: li === 0,
+          });
+        })));
+        if (!lines.length) return '';
+
+        const medH0 = median(lines.filter(l => l.n >= 5).map(l => l.h)) || median(lines.map(l => l.h));
+        // Düşük güvenli satırlardan yalnızca yeterince gerçek kelime içerenleri tut; büyük yazılı (başlık) satırlarda 1 kelime yeter
+        for (let i = lines.length - 1; i >= 0; i--) {
+          const l = lines[i];
+          if (l.lowConf && l.realWords < 3 && !(l.h >= medH0 * 1.15 && l.realWords >= 1)) lines.splice(i, 1);
+        }
+        if (!lines.length) return '';
+
+        const body = lines.filter(l => l.n >= 5);
+        const ref = body.length ? body : lines;
+        const medH = median(ref.map(l => l.h));
+        const left = median(ref.map(l => l.x0));
+        const right = median(ref.map(l => l.x1));
+        const width = Math.max(1, right - left);
+
+        // Başlık: gövde satırlarından belirgin büyük, kısa, satırı doldurmayan ve noktalama ile bitmeyen satır
+        const isHeading = (l) =>
+          l.n <= 12 && /[A-Za-z]{3,}/.test(l.text) && !/[.,;:!?]$/.test(l.text) &&
+          l.h >= medH * 1.15 && l.x1 < left + width * 0.85;
+
+        const out = [];
+        let para = '';
+        let prev = null;
+        const flush = () => {
+          const p = para.trim().replace(/([.!?”"])\s+[A-Za-z0-9]$/, '$1');               // paragraf sonundaki tek harf lekesi
+          if (p) out.push(p);
+          para = '';
+        };
+        const countWords = (t) => t.split(/\s+/).filter(x => /[A-Za-z]{2,}/.test(x)).length;
+        for (let l of lines) {
+          if (isHeading(l)) {
+            flush();
+            if (canvas && worker) {
+              try {
+                // Yeni okuma yalnızca güvenilirse kullanılır: yüksek ortalama güven, çoğu parça gerçek kelime,
+                // ve eskisinden çok daha fazla kelime değil (süs grafikleri çöp üretmesin)
+                // Yalnızca ilk ve son gerçek kelime arasını kes (yandaki süs grafiklerini dışarıda bırak)
+                const again = await reocrLine(canvas, { x0: l.x0, x1: l.cx1, y0: l.bbox.y0, y1: l.bbox.y1 }, worker);
+                const before = countWords(l.text);
+                if (again.text && again.avgConf >= 60 &&
+                    countWords(again.text) >= Math.max(1, before - 1) && countWords(again.text) <= before + 4) {
+                  l = { ...l, text: keepOriginalDigits(again.text, l.text.replace(/(\s+[^\sA-Za-z]{1,2}|\s+\d)+$/, '')) };
+                }
+              } catch (e) {}
+            }
+            l = { ...l, text: l.text.replace(/(\s+[^\sA-Za-z]{1,2}|\s+\d)+$/, '').replace(/[\s:;,\-]+$/, '') }; // "1961: 0" → "1961"
+            if (prev && prev.heading && out.length) out[out.length - 1] += ' ' + l.text;
+            else out.push('## ' + l.text);
+            prev = { ...l, heading: true };
+            continue;
+          }
+          const newPara = !para || l.paraStart && prev && !prev.heading && /[.!?"”]$/.test(prev.text) ||
+            (l.x0 - left) > width * 0.025 ||
+            (prev && /[.!?"”:]$/.test(prev.text) && prev.x1 < left + width * 0.85);
+          if (newPara) flush();
+          if (para && /[A-Za-z]-$/.test(para)) para = para.slice(0, -1) + l.text;        // satır sonu hecelemesi
+          else para += (para ? ' ' : '') + l.text;
+          prev = { ...l, heading: false };
+        }
+        flush();
+        return out.join('\n\n');
+      };
+
+      // OCR çıktısını okunur hale getir: satır sonu "|" artıkları, heceleme tireleri ve paragraf içi satır kırılmaları
+      const cleanOcrText = (raw) => raw
+        .replace(/\r/g, '')
+        .replace(/[ \t]*[|¦]+[ \t]*$/gm, '')          // satır sonundaki | çizgileri
+        .replace(/^[ \t]*[|¦]+[ \t]*/gm, '')          // satır başındaki | çizgileri
+        .replace(/(\w)-\n(\w)/g, '$1$2')               // sat-\nır → satır
+        .replace(/([^\n])\n(?!\n)/g, '$1 ')            // paragraf içindeki tek satır sonlarını birleştir
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+
+      // Küçük resimleri OCR'dan önce büyüt (küçük yazılar daha doğru okunur)
+      const upscaleForOcr = (canvas) => {
+        const scale = Math.max(1, Math.min(2.5, 2000 / canvas.width));
+        if (scale <= 1.05) return canvas;
+        const out = document.createElement('canvas');
+        out.width = Math.round(canvas.width * scale);
+        out.height = Math.round(canvas.height * scale);
+        const ctx = out.getContext('2d');
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(canvas, 0, 0, out.width, out.height);
+        return out;
+      };
+
+      const base64ToBytes = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+      // EMF (Windows çizim dosyası) içindeki gömülü bitmap'i çıkarıp canvas'a çizer.
+      // Word'e yapıştırılan taranmış sayfalar çoğunlukla bu biçimde saklanır ve tarayıcılar EMF'yi gösteremez.
+      const emfToCanvas = async (bytes) => {
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        let off = 0, best = null;
+        while (off + 8 <= dv.byteLength) {
+          const type = dv.getUint32(off, true), size = dv.getUint32(off + 4, true);
+          if (size < 8 || off + size > dv.byteLength) break;
+          let r = null;
+          if (type === 81 || type === 80) { // EMR_STRETCHDIBITS / EMR_SETDIBITSTODEVICE
+            r = { bmi: dv.getUint32(off + 48, true), cbBmi: dv.getUint32(off + 52, true), bits: dv.getUint32(off + 56, true), cbBits: dv.getUint32(off + 60, true) };
+          } else if ((type === 76 || type === 77) && size >= 100) { // EMR_BITBLT / EMR_STRETCHBLT
+            r = { bmi: dv.getUint32(off + 84, true), cbBmi: dv.getUint32(off + 88, true), bits: dv.getUint32(off + 92, true), cbBits: dv.getUint32(off + 96, true) };
+          }
+          if (r && r.cbBmi && r.cbBits && (!best || r.cbBits > best.cbBits)) { r.base = off; best = r; }
+          if (type === 14) break; // EMR_EOF
+          off += size;
+        }
+        if (!best) return null;
+
+        const h = best.base + best.bmi;
+        const bitsStart = best.base + best.bits;
+        const biSize = dv.getUint32(h, true);
+        const w = dv.getInt32(h + 4, true);
+        const rawH = dv.getInt32(h + 8, true);
+        const bpp = dv.getUint16(h + 14, true);
+        const comp = dv.getUint32(h + 16, true);
+        const H = Math.abs(rawH), topDown = rawH < 0;
+        const canvas = document.createElement('canvas');
+
+        if (comp === 4 || comp === 5) { // BI_JPEG / BI_PNG: içerik doğrudan JPEG/PNG
+          const blob = new Blob([bytes.slice(bitsStart, bitsStart + best.cbBits)], { type: comp === 4 ? 'image/jpeg' : 'image/png' });
+          const bmp = await createImageBitmap(blob);
+          canvas.width = bmp.width; canvas.height = bmp.height;
+          canvas.getContext('2d').drawImage(bmp, 0, 0);
+          return canvas;
+        }
+        if (!(comp === 0 || comp === 3) || ![1, 4, 8, 16, 24, 32].includes(bpp) || w <= 0 || H <= 0) return null;
+
+        const clrUsed = dv.getUint32(h + 32, true);
+        const nPal = bpp <= 8 ? (clrUsed || (1 << bpp)) : 0;
+        const palOff = h + biSize + (comp === 3 && biSize === 40 ? 12 : 0);
+        const pal = [];
+        for (let i = 0; i < nPal; i++) {
+          const p = palOff + i * 4;
+          pal.push([bytes[p + 2], bytes[p + 1], bytes[p]]);
+        }
+        const stride = ((w * bpp + 31) >> 5) * 4;
+        canvas.width = w; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(w, H);
+        const d = img.data;
+        for (let y = 0; y < H; y++) {
+          const row = bitsStart + (topDown ? y : H - 1 - y) * stride;
+          for (let x = 0; x < w; x++) {
+            let r, g, b;
+            if (bpp === 32) { const p = row + x * 4; b = bytes[p]; g = bytes[p + 1]; r = bytes[p + 2]; }
+            else if (bpp === 24) { const p = row + x * 3; b = bytes[p]; g = bytes[p + 1]; r = bytes[p + 2]; }
+            else if (bpp === 16) { const v = bytes[row + x * 2] | (bytes[row + x * 2 + 1] << 8); r = ((v >> 10) & 31) << 3; g = ((v >> 5) & 31) << 3; b = (v & 31) << 3; }
+            else {
+              let idx;
+              if (bpp === 8) idx = bytes[row + x];
+              else if (bpp === 4) idx = (bytes[row + (x >> 1)] >> ((x & 1) ? 0 : 4)) & 15;
+              else idx = (bytes[row + (x >> 3)] >> (7 - (x & 7))) & 1;
+              [r, g, b] = pal[idx] || [0, 0, 0];
+            }
+            const q = (y * w + x) * 4;
+            d[q] = r; d[q + 1] = g; d[q + 2] = b; d[q + 3] = 255;
+          }
+        }
+        ctx.putImageData(img, 0, 0);
+        return canvas;
+      };
+
+      // PDF metni bozuk kodlanmışsa (anlamsız karakterler) OCR'a geçmek için basit kontrol
+      const looksGarbled = (text) => {
+        const chars = text.replace(/\s/g, '');
+        if (chars.length < 40) return false;
+        const letters = (chars.match(/[A-Za-zÀ-ɏ]/g) || []).length;
+        const words = text.split(/\s+/).filter(w => w.length > 2);
+        const withVowel = words.filter(w => /[aeiouyAEIOUY]/.test(w)).length;
+        return letters / chars.length < 0.6 || (words.length > 5 && withVowel / words.length < 0.5);
+      };
+
+      const pageHasImages = async (page) => {
+        try {
+          const ops = await page.getOperatorList({ intent: 'print' });
+          const O = pdfjsLib.OPS;
+          return ops.fnArray.some(fn => fn === O.paintImageXObject || fn === O.paintInlineImageXObject || fn === O.paintImageMaskXObject || fn === O.paintJpegXObject);
+        } catch (e) { return false; }
+      };
+
+      const extractPdfText = async (buffer) => {
+        if (!window.pdfjsLib) throw new Error('PDF okuyucu yüklenemedi (internet bağlantısını kontrol edin).');
+        const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const tc = await page.getTextContent();
+          let text = tc.items.map(it => it.str + (it.hasEOL ? '\n' : '')).join('').trim();
+          const textLen = text.replace(/\s/g, '').length;
+          // OCR gereken durumlar: metin katmanı yok / çok az metin + sayfada resim var / metin bozuk kodlanmış / kullanıcı zorladı
+          const needOcr = forceOcr || textLen < 20 || looksGarbled(text) || (textLen < 400 && await pageHasImages(page));
+          if (needOcr) {
+            const viewport = page.getViewport({ scale: 2 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            // intent:'print' requestAnimationFrame kullanmaz; sekme arka plandayken de çizim takılmaz
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport, intent: 'print' }).promise;
+            const ocrText = await ocrImage(canvas, 'Sayfa ' + i + '/' + pdf.numPages);
+            // OCR daha fazla metin bulduysa onu kullan (az metinli sayfalarda gerçek metni kaybetme)
+            if (forceOcr || ocrText.replace(/\s/g, '').length >= textLen || looksGarbled(text)) text = ocrText;
+          }
+          pages.push(text);
+        }
+        return pages.join('\n\n');
+      };
+
+      const extractDocxText = async (buffer) => {
+        if (!window.mammoth) throw new Error('Word okuyucu yüklenemedi (internet bağlantısını kontrol edin).');
+        // HTML'e çevir: böylece belgedeki resimler de yerinde yakalanır ve OCR ile okunur
+        const result = await mammoth.convertToHtml({ arrayBuffer: buffer }, {
+          convertImage: mammoth.images.imgElement(img =>
+            img.read('base64').then(b64 => ({ src: 'data:' + img.contentType + ';base64,' + b64 }))
+          )
+        });
+        const doc = new DOMParser().parseFromString(result.value, 'text/html');
+        const imgs = [...doc.querySelectorAll('img')];
+        for (let i = 0; i < imgs.length; i++) {
+          let t = '';
+          const label = 'Belgedeki resim ' + (i + 1) + '/' + imgs.length;
+          try {
+            const src = imgs[i].getAttribute('src') || '';
+            const m = src.match(/^data:([^;]+);base64,(.*)$/);
+            const type = m ? m[1].toLowerCase() : '';
+            if (/emf/.test(type)) {
+              // EMF: tarayıcı gösteremez, içindeki bitmap'i çıkar
+              const canvas = await emfToCanvas(base64ToBytes(m[2]));
+              if (canvas) t = await ocrImage(upscaleForOcr(canvas), label);
+            } else if (/wmf/.test(type)) {
+              t = ''; // WMF desteklenmiyor
+            } else {
+              const bmp = await createImageBitmap(await (await fetch(src)).blob());
+              const c = document.createElement('canvas');
+              c.width = bmp.width; c.height = bmp.height;
+              c.getContext('2d').drawImage(bmp, 0, 0);
+              t = await ocrImage(upscaleForOcr(c), label);
+            }
+          } catch (e) { if (!window.Tesseract) throw e; }
+          imgs[i].replaceWith(doc.createTextNode(t ? '\n' + t + '\n' : ''));
+        }
+        const blocks = [...doc.body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, td, th')]
+          .filter(el => !el.querySelector('p, li, td, th'));
+        // Word başlıkları (Başlık 1-6) ve tamamı kalın kısa paragraflar "## " ile başlık olarak işaretlenir
+        const asText = (el) => {
+          const t = el.textContent.trim();
+          if (!t) return '';
+          if (/^H[1-6]$/.test(el.tagName)) return '## ' + t.replace(/\n+/g, ' ');
+          const strong = [...el.querySelectorAll('strong, b')].map(s => s.textContent).join('').trim();
+          if (el.tagName === 'P' && t.length <= 120 && !/\n/.test(t) && strong === t) return '## ' + t;
+          return t;
+        };
+        const text = blocks.length
+          ? blocks.map(asText).filter(Boolean).join('\n\n')
+          : doc.body.textContent;
+        return text;
+      };
+
+      // Tek bir dosyadan metni çıkarır (PDF, Word, resim, txt)
+      const readFileText = async (file) => {
+        const ext = file.name.split('.').pop().toLowerCase();
+        let text = '';
+        if (ext === 'pdf') text = await extractPdfText(await file.arrayBuffer());
+        else if (ext === 'docx') text = await extractDocxText(await file.arrayBuffer());
+        else if (ext === 'txt') text = await file.text();
+        else if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'].includes(ext) || (file.type || '').startsWith('image/')) text = await ocrImage(file, 'Resim');
+        else if (ext === 'doc') throw new Error('Eski .doc biçimi desteklenmiyor. Word\'de "Farklı Kaydet > .docx" ile kaydedin.');
+        else throw new Error('Desteklenmeyen dosya türü (PDF, Word .docx, resim veya .txt seçin).');
+
+        text = text.replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        // Sayfa/resim sınırında bölünen cümleleri birleştir ("...the old\n\nman: he too..." → tek paragraf)
+        text = text.replace(/([a-z,;])\n\n(?!## )([a-z])/g, '$1 $2');
+        if (!text) throw new Error('Okunabilir metin bulunamadı. Görüntü bulanık veya çok küçük olabilir.');
+        return { text, ext };
+      };
+
+      const countWordsOf = (t) => t.replace(/^##\s+/gm, '').trim().split(/\s+/).filter(Boolean).length;
+
+      // --- Çoklu dosya kuyruğu ---
+      // docs: [{ id, name, title, text, ext, status: 'waiting' | 'reading' | 'ready' | 'error', error }]
+      const [docs, setDocs] = useState([]);
+      const [selectedDocId, setSelectedDocId] = useState(null);
+      const [mergeDocs, setMergeDocs] = useState(false);
+      const [mergeTitle, setMergeTitle] = useState('');
+      const updateDoc = (id, patch) => setDocs(prev => prev.map(d => d.id === id ? { ...d, ...patch } : d));
+      const selectedDoc = docs.find(d => d.id === selectedDocId) || null;
+      const queueMode = docs.length > 0;
+
+      const handleFile = async (e) => {
+        const files = [...(e.target.files || [])];
+        e.target.value = '';
+        if (!files.length) return;
+        const stamp = Date.now();
+        const added = files.map((f, i) => ({
+          id: 'doc_' + stamp + '_' + i,
+          file: f,
+          name: f.name,
+          title: f.name.replace(/\.[^.]+$/, ''),
+          text: '',
+          ext: f.name.split('.').pop().toLowerCase(),
+          status: 'waiting',
+          error: '',
+        }));
+        // Elle yazılmış metin varsa kaybolmasın: kuyruğun ilk öğesi olarak ekle
+        const manual = !queueMode && content.trim()
+          ? [{ id: 'doc_' + stamp + '_m', name: 'Elle girilen metin', title: title.trim() || 'Elle girilen metin', text: content.trim(), ext: fileType, status: 'ready', error: '' }]
+          : [];
+        setDocs(prev => [...prev, ...manual, ...added.map(({ file, ...d }) => d)]);
+        if (!selectedDocId) setSelectedDocId((manual[0] || added[0]).id);
+
+        setIsReadingFile(true);
+        try {
+          for (let i = 0; i < added.length; i++) {
+            const d = added[i];
+            updateDoc(d.id, { status: 'reading' });
+            setFileStatus((added.length > 1 ? '(' + (i + 1) + '/' + added.length + ') ' : '') + '"' + d.name + '" okunuyor...');
+            try {
+              const { text, ext } = await readFileText(d.file);
+              updateDoc(d.id, { status: 'ready', text, ext });
+            } catch (err) {
+              updateDoc(d.id, { status: 'error', error: err && err.message ? err.message : 'Dosya okunamadı.' });
+            }
+          }
+          setFileStatus(added.length > 1 ? added.length + ' dosya işlendi.' : '"' + added[0].name + '" işlendi.');
+        } finally {
+          await closeOcrWorker();
+          setIsReadingFile(false);
+        }
+      };
+
+      const removeDoc = (id) => {
+        setDocs(prev => {
+          const next = prev.filter(d => d.id !== id);
+          if (selectedDocId === id) setSelectedDocId(next[0] ? next[0].id : null);
+          return next;
+        });
+      };
+
+      const clearAll = () => {
+        setDocs([]); setSelectedDocId(null);
+        setContent(''); setFileType('manual'); setFileStatus('');
+      };
+
+      const readyDocs = docs.filter(d => d.status === 'ready' && d.text.trim());
+
+      const makeReading = (t, text, type, i) => ({
+        id: 'reading_' + Date.now() + '_' + i,
+        title: t,
+        content: text,
+        weekId,
+        category,
+        wordCount: countWordsOf(text),
+        savedWordIds: [],
+        fileType: type,
+        dateAdded: new Date().toISOString()
+      });
+
+      const handleSave = (e) => {
+        e.preventDefault();
+        if (isReadingFile) return;
+        if (!queueMode) {
+          if (!title.trim() || !content.trim()) return;
+          onSave([makeReading(title.trim(), content.trim(), fileType, 0)]);
+          return;
+        }
+        if (!readyDocs.length) return;
+        if (mergeDocs && readyDocs.length > 1) {
+          // Tek metin: her dosya kendi başlığıyla ayrılır
+          const merged = readyDocs.map(d => (/^##\s/.test(d.text) ? '' : '## ' + d.title + '\n\n') + d.text).join('\n\n');
+          const t = mergeTitle.trim() || readyDocs.map(d => d.title).join(' + ');
+          onSave([makeReading(t, merged, 'merged', 0)]);
+        } else {
+          onSave(readyDocs.map((d, i) => makeReading(d.title.trim() || d.name, d.text.trim(), d.ext, i)));
+        }
+      };
+
+      const statusBadge = (d) => ({
+        waiting: <span className="text-slate-500">bekliyor</span>,
+        reading: <span className="text-blue-300">okunuyor…</span>,
+        ready: <span className="text-emerald-400">{countWordsOf(d.text)} kelime</span>,
+        error: <span className="text-red-400" title={d.error}>hata</span>,
+      })[d.status];
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <form onSubmit={handleSave} className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-lg w-full space-y-3 max-h-[92vh] overflow-y-auto">
+            <h3 className="font-bold text-base text-white">İngilizce Okuma Metni Yükle</h3>
+            {!queueMode && (
+              <input
+                type="text"
+                placeholder="Başlık (Örn: Reading 1: Technology)"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+              />
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={weekId}
+                onChange={e => setWeekId(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+              >
+                {weeks.map(w => <option key={w.id} value={w.id}>{w.title}</option>)}
+              </select>
+              <select
+                value={category}
+                onChange={e => setCategory(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+              >
+                <option value="Fen Bilimleri">Fen Bilimleri</option>
+                <option value="Sağlık Bilimleri">Sağlık Bilimleri</option>
+                <option value="Sosyal Bilimler">Sosyal Bilimler</option>
+                <option value="Genel Akademik">Genel Akademik</option>
+              </select>
+            </div>
+            <label className={"flex flex-col items-center justify-center gap-1 w-full px-3 py-4 rounded-lg border-2 border-dashed cursor-pointer transition " + (isReadingFile ? "border-blue-500 bg-blue-500/10" : "border-slate-700 hover:border-blue-500 hover:bg-slate-800/60")}>
+              <span className="text-xs font-bold text-white">{isReadingFile ? 'Dosyalar okunuyor...' : queueMode ? '+ Başka dosya ekle' : 'PDF, Word veya resim dosyaları seç'}</span>
+              <span className="text-[11px] text-slate-400">Birden çok dosya seçebilirsiniz (Ctrl/Shift ile) · .pdf, .docx, .jpg, .png, .txt</span>
+              <input type="file" multiple accept=".pdf,.docx,.doc,.txt,.png,.jpg,.jpeg,.webp,.bmp,.gif,image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" onChange={handleFile} disabled={isReadingFile} className="hidden" />
+            </label>
+
+            {queueMode && (
+              <div className="rounded-lg border border-slate-800 divide-y divide-slate-800 max-h-44 overflow-y-auto">
+                {docs.map((d, i) => (
+                  <div
+                    key={d.id}
+                    onClick={() => setSelectedDocId(d.id)}
+                    className={"flex items-center gap-2 px-3 py-2 text-[11px] cursor-pointer " + (d.id === selectedDocId ? "bg-blue-600/15" : "hover:bg-slate-800/60")}
+                  >
+                    <span className="text-slate-500 w-4 text-right">{i + 1}</span>
+                    <span className="flex-1 truncate text-slate-200" title={d.name}>{d.title || d.name}</span>
+                    {statusBadge(d)}
+                    <button
+                      type="button"
+                      onClick={(ev) => { ev.stopPropagation(); removeDoc(d.id); }}
+                      disabled={d.status === 'reading'}
+                      aria-label={'"' + d.name + '" dosyasını listeden çıkar'}
+                      title="Listeden çıkar"
+                      className="px-1.5 rounded text-slate-500 hover:bg-red-600 hover:text-white disabled:opacity-30"
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {queueMode && docs.length > 1 && (
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-[11px] text-slate-300 cursor-pointer select-none">
+                  <input type="checkbox" checked={mergeDocs} onChange={e => setMergeDocs(e.target.checked)} className="accent-blue-500" />
+                  Hepsini tek metinde birleştir (işaretlenmezse her dosya ayrı metin olarak kaydedilir)
+                </label>
+                {mergeDocs && (
+                  <input
+                    type="text"
+                    placeholder="Birleşik metnin başlığı (boş bırakılırsa dosya adları kullanılır)"
+                    value={mergeTitle}
+                    onChange={e => setMergeTitle(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                  />
+                )}
+              </div>
+            )}
+            <label className="flex items-center gap-2 text-[11px] text-slate-400 cursor-pointer select-none">
+              <input type="checkbox" checked={forceOcr} onChange={e => setForceOcr(e.target.checked)} disabled={isReadingFile} className="accent-blue-500" />
+              PDF'in tüm sayfalarını resim olarak oku (metin eksik veya bozuk çıkıyorsa işaretleyin)
+            </label>
+            {fileStatus && (
+              <p className={"text-[11px] " + (fileStatus.startsWith('Hata') ? "text-red-400" : isReadingFile ? "text-blue-300" : "text-emerald-400")}>{fileStatus}</p>
+            )}
+            {queueMode ? (
+              selectedDoc && (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    placeholder="Bu metnin başlığı"
+                    value={selectedDoc.title}
+                    onChange={e => updateDoc(selectedDoc.id, { title: e.target.value })}
+                    className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+                  />
+                  {selectedDoc.status === 'error' ? (
+                    <p className="text-[11px] text-red-400">Hata: {selectedDoc.error}</p>
+                  ) : (
+                    <textarea
+                      rows={7}
+                      placeholder={selectedDoc.status === 'ready' ? '' : 'Dosya okunuyor, metin birazdan burada görünecek...'}
+                      value={selectedDoc.text}
+                      disabled={selectedDoc.status !== 'ready'}
+                      onChange={e => updateDoc(selectedDoc.id, { text: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-serif leading-relaxed disabled:opacity-60"
+                    />
+                  )}
+                </div>
+              )
+            ) : (
+              <textarea
+                rows={7}
+                placeholder={"İngilizce metni buraya yapıştırın veya yukarıdan dosya seçin...\n\nBaşlık satırlarını \"## \" ile başlatın; okuma ekranında kalın gösterilir."}
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-serif leading-relaxed"
+              />
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              {(queueMode || content) && (
+                <button type="button" onClick={clearAll} disabled={isReadingFile} className="mr-auto px-4 py-2 rounded-lg bg-slate-800 text-xs text-red-400 hover:bg-red-600 hover:text-white disabled:opacity-50">{queueMode ? 'Listeyi Temizle' : 'Metni Temizle'}</button>
+              )}
+              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              <button type="submit" disabled={isReadingFile || (queueMode && !readyDocs.length)} className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white disabled:opacity-50">
+                {!queueMode ? 'Metni Kaydet'
+                  : mergeDocs && readyDocs.length > 1 ? 'Birleştirip Kaydet'
+                  : readyDocs.length > 1 ? readyDocs.length + ' Metni Kaydet' : 'Metni Kaydet'}
+              </button>
+            </div>
+          </form>
+        </div>
+      );
+    }
+
+    function WeekAddModal({ onClose, onSave }) {
+      const [title, setTitle] = useState(`1. Hafta – ${new Date().toLocaleDateString('tr-TR')}`);
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-sm w-full space-y-3">
+            <h3 className="font-bold text-base text-white">Yeni Hafta Oluştur</h3>
+            <input
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!title.trim()) return;
+                  onSave({
+                    id: 'week_' + Date.now(),
+                    title: title.trim(),
+                    startDate: getTodayStr(),
+                    readingIds: [],
+                    archived: false
+                  });
+                }}
+                className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white"
+              >
+                Oluştur
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

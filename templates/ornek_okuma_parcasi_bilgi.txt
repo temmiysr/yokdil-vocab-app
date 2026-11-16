@@ -1,0 +1,27 @@
+================================================================================
+YÖKDİL OKUMA METNİ YÖNETİMİ HAKKINDA BİLGİ VE KULLANIM REHBERİ
+================================================================================
+
+ÖNEMLİ KURAL:
+Uygulama internetten otomatik okuma parçası indirmez ve yapay zekâyla kendiliğinden
+okuma parçası üretmez. Tüm okuma metinleri yalnızca sizin tarafınızdan yüklenir.
+
+Kullanabileceğiniz Yükleme Formatları:
+1. Düz Metin / Kopyala-Yapıştır: Doğrudan panonuzdaki İngilizce metni yapıştırabilirsiniz.
+2. PDF Dosyaları (.pdf): Bilgisayarınızdan veya telefonunuzdan PDF yükleyebilirsiniz.
+3. Word Dosyaları (.docx): Paragraf düzeni korunarak metin otomatik çıkarılır.
+4. Fotoğraf / Görsel OCR: Taranmış kitap sayfalarının fotoğrafını yüklediğinizde istemci
+   taraflı OCR çalışır; metni kaydetmeden önce kontrol edip düzeltebileceğiniz bir
+   düzenleme kutusu açılır.
+
+Örnek Bir Okuma Metni Formatı (Test etmek isterseniz kopyalayıp yükleyebilirsiniz):
+--------------------------------------------------------------------------------
+Başlık: Reading 1: Technological Advancements & Agriculture
+Hafta: 1. Hafta – 16 Kasım 2026
+Alan: Fen Bilimleri
+
+Metin:
+Technological advancements have significantly affected agricultural production across the globe. Modern automated machinery and genetic engineering allow farmers to achieve substantially higher crop yields with less manual labor.
+
+However, the shortage of natural resources remains a major challenge for developing regions. Excessive extraction of groundwater and soil degradation continuously threaten food security. Therefore, scientists emphasize sustainable practices to safeguard future generations.
+--------------------------------------------------------------------------------

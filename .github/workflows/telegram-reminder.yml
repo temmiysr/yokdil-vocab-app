@@ -1,0 +1,54 @@
+name: Telegram Daily Vocabulary Reminder
+
+# Türkiye Saati (UTC+3) ve GitHub Actions Zamanlayıcı Notu:
+# GitHub Actions cron saatleri her zaman UTC (Evrensel Zaman) formatındadır.
+# Türkiye Saati (TSİ) = UTC + 3
+# Örneğin Türkiye saatiyle her akşam 20:00'da bildirim gitmesi için:
+# 20:00 - 3 saat = 17:00 UTC olmalıdır. ('0 17 * * *')
+#
+# ÖNEMLİ BİLGİ: GitHub Actions cron görevleri yüksek sunucu yoğunluğu anlarında
+# 5 ila 25 dakika arasında gecikmeli (jitter) çalışabilir. Bu GitHub'ın genel
+# zamanlama mimarisinin doğal bir özelliğidir.
+
+on:
+  schedule:
+    # Her gün Türkiye Saati ile 20:00 (17:00 UTC)
+    - cron: '0 17 * * *'
+  workflow_dispatch: # GitHub arayüzünden "Run workflow" ile anında test edilebilme imkânı
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Daily Notification to Telegram
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APP_URL: ${{ secrets.APP_URL }}
+        run: |
+          if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+            # Telegram henüz kurulmadıysa her gün hata e-postası gelmesin diye sessizce atla
+            echo "Bilgi: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secret'ları tanımlı değil; bildirim atlandı."
+            echo "Kurulum için docs/TELEGRAM_BOT_KURULUMU.md dosyasına bakın."
+            exit 0
+          fi
+
+          TARGET_URL="${APP_URL:-https://github.com}"
+          
+          # Bildirim mesajı (HTML formatında)
+          MESSAGE="📚 <b>YÖKDİL İngilizce Tekrar Zamanı!</b>%0A%0ABugünkü kelimelerini ve okuma parçalarını çalışmayı unutma.%0A%0A🎯 <i>Spaced Repetition (Aralıklı Tekrar) ile unutmaya son ver!</i>%0A%0A👉 <a href=\"$TARGET_URL\">Uygulamaya Git ve Çalışmaya Başla</a>"
+
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            -d "text=${MESSAGE}" \
+            -d "parse_mode=HTML" \
+            -d "disable_web_page_preview=false")
+
+          echo "Telegram API Yanıtı: $RESPONSE"
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Bildirim başarıyla gönderildi."
+          else
+            echo "Bildirim gönderilemedi!"
+            exit 1
+          fi

@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "description": "YÖKDİL Kelime Bankası ve Yedekleme JSON Şablonu",
+  "vocab": [
+    {
+      "english": "prevalent",
+      "turkish": "yaygın; hâkim",
+      "ipa": "/ˈprevələnt/",
+      "partOfSpeech": "adjective",
+      "lemma": "prevalent",
+      "originalSentence": "Cardiovascular diseases are prevalent among sedentary populations.",
+      "sentenceTranslation": "Hareketsiz yaşayan topluluklar arasında kardiyovasküler hastalıklar yaygındır.",
+      "prepositions": ["in", "among"],
+      "collocations": ["prevalent condition", "increasingly prevalent"],
+      "academicUsage": "Sağlık Bilimleri",
+      "sourceType": "verified_exam",
+      "examInfo": {
+        "year": 2023,
+        "term": "İlkbahar",
+        "field": "Sağlık Bilimleri",
+        "verified": true
+      },
+      "isDifficult": false
+    },
+    {
+      "english": "yield",
+      "turkish": "ürün/verim vermek; teslim olmak",
+      "ipa": "/jiːld/",
+      "partOfSpeech": "verb",
+      "lemma": "yield",
+      "originalSentence": "Modern irrigation methods yield higher crop returns.",
+      "sentenceTranslation": "Modern sulama yöntemleri daha yüksek ürün verimi sağlar.",
+      "prepositions": ["to"],
+      "collocations": ["crop yield", "yield results"],
+      "academicUsage": "Fen Bilimleri",
+      "sourceType": "user_yokdil_list",
+      "isDifficult": false
+    }
+  ]
+}

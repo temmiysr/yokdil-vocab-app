@@ -1,0 +1,21 @@
+# Bağımlılıklar ve derleme çıktıları (dist/ bilerek dahil: uygulamanın çalışan sürümü orada)
+node_modules/
+.vite/
+
+# Gizli bilgiler / yerel ayarlar
+.env
+.env.*
+*.local
+
+# Geçici dosyalar
+_ocrtest/
+_test-*
+*.log
+npm-debug.log*
+
+# İşletim sistemi / editör
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
