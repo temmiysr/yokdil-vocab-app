@@ -995,6 +995,73 @@
       const [selectionText, setSelectionText] = useState('');
       const [popoverPos, setPopoverPos] = useState(null);
 
+      // --- Tıkla-anlam: okuma ekranında tek tıkla kelimenin anlamı ---
+      const [wordPop, setWordPop] = useState(null);       // { word, sentence, x, y, top, readingId }
+      const handleWordClick = (e, reading) => {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;   // seçim yapılıyorsa eski akış
+        let node = null, offset = 0;
+        if (document.caretRangeFromPoint) {
+          const r = document.caretRangeFromPoint(e.clientX, e.clientY);
+          if (r) { node = r.startContainer; offset = r.startOffset; }
+        } else if (document.caretPositionFromPoint) {
+          const p = document.caretPositionFromPoint(e.clientX, e.clientY);
+          if (p) { node = p.offsetNode; offset = p.offset; }
+        }
+        if (!node || node.nodeType !== 3) { setWordPop(null); return; }
+        const text = node.textContent;
+        const isW = (ch) => /[A-Za-z'’-]/.test(ch || '');
+        let s = offset, en = offset;
+        while (s > 0 && isW(text[s - 1])) s--;
+        while (en < text.length && isW(text[en])) en++;
+        while (s < en && /['’-]/.test(text[s])) s++;
+        while (en > s && /['’-]/.test(text[en - 1])) en--;
+        let word = text.slice(s, en);
+        if (/['’]s$/i.test(word)) { word = word.slice(0, -2); en -= 2; }
+        if (word.length < 2 || !/[A-Za-z]{2}/.test(word)) { setWordPop(null); return; }
+        const range = document.createRange();
+        range.setStart(node, s); range.setEnd(node, en);
+        const rect = range.getBoundingClientRect();
+        if (!rect || (rect.left === 0 && rect.top === 0)) return;
+        setPopoverPos(null);
+        setWordPop({
+          word,
+          sentence: extractSentence(reading.content.replace(/^##\s+/gm, ''), word),
+          x: rect.left + rect.width / 2, y: rect.bottom, top: rect.top,
+          readingId: reading.id,
+        });
+      };
+
+      // Anlam kutusundan karta ekle (bankada varsa yeni kaynak cümle eklenir)
+      const addWordFromPopover = (info, pop) => {
+        const reading = readings.find(r => r.id === pop.readingId);
+        const now = new Date().toISOString();
+        const lemma = (info.lemma || pop.word).toLowerCase();
+        const source = { readingId: reading ? reading.id : '', readingTitle: reading ? reading.title : '', weekId: reading ? reading.weekId : '', sentence: pop.sentence, dateAdded: now };
+        const existing = cards.find(c => String(c.lemma || c.english).toLowerCase() === lemma);
+        if (existing) {
+          setCards(cards.map(c => c.id === existing.id ? { ...c, sources: [...(c.sources || []), source], updatedAt: now } : c));
+          showToast('"' + lemma + '" zaten bankada; yeni cümle eklendi.');
+        } else {
+          const id = 'card_' + Date.now();
+          setCards([{
+            id, english: lemma, lemma,
+            turkish: info.turkish || '(anlam bulunamadı – düzenleyin)',
+            trSenses: info.trSenses || [], trSource: info.trSource || '',
+            ipa: info.ipa || '', okunus: info.okunus || '', audioUrl: info.audioUrl || '',
+            definition: info.definition || '', examples: info.examples || [], synonyms: info.synonyms || [], antonyms: info.antonyms || [],
+            partOfSpeech: info.pos || 'noun',
+            originalSentence: pop.sentence,
+            readingId: source.readingId, readingTitle: source.readingTitle, weekId: source.weekId,
+            sources: [source], sourceType: 'user_reading', isDifficult: false,
+            srs: createSRS(id), createdAt: now, updatedAt: now,
+          }, ...cards]);
+          if (reading) setReadings(readings.map(r => r.id === reading.id ? { ...r, savedWordIds: [...(r.savedWordIds || []), id] } : r));
+          showToast('"' + lemma + '" karta eklendi.');
+        }
+        setWordPop(null);
+      };
+
       useEffect(() => { persist(STORAGE_KEYS.WEEKS, weeks); }, [weeks]);
       useEffect(() => { persist(STORAGE_KEYS.READINGS, readings); }, [readings]);
 
@@ -1338,8 +1405,11 @@
 
                         {/* Metin Alanı ve Seçim */}
                         <div
+                          data-reader
+                          title="Bir kelimeye tıklayın: anlamı görünsün"
                           onMouseUp={() => handleReaderSelection(current.content)}
                           onTouchEnd={() => handleReaderSelection(current.content)}
+                          onClick={(e) => handleWordClick(e, current)}
                           className="bg-slate-950 p-8 rounded-2xl border border-slate-800 text-slate-200 font-serif leading-loose text-base whitespace-pre-wrap select-text"
                         >
                           {/* "## " ile başlayan satırlar başlık olarak kalın gösterilir */}
@@ -1390,6 +1460,19 @@
                     )}
                   </div>
                 )
+              )}
+
+              {/* SINAVLAR & TESTLER */}
+              {activeTab === 'study' && (
+                <ExamSection
+                  cards={cards}
+                  readings={readings}
+                  onMarkDifficult={(ids) => {
+                    const set = new Set(ids);
+                    setCards(prev => prev.map(c => set.has(c.id) ? { ...c, isDifficult: true, updatedAt: new Date().toISOString() } : c));
+                    showToast(ids.length + ' kelime "Zorlandığım Kelimeler"e eklendi.');
+                  }}
+                />
               )}
 
               {/* KELİME KARTLARI */}
@@ -1571,6 +1654,11 @@
             />
           )}
 
+          {/* Tıkla-anlam kutusu */}
+          {wordPop && activeTab === 'readings' && (
+            <WordPopover pop={wordPop} cards={cards} onAdd={addWordFromPopover} onClose={() => setWordPop(null)} />
+          )}
+
           {/* Metinden Otomatik Kelime Çıkarma */}
           {autoVocabReadingId && readings.find(r => r.id === autoVocabReadingId) && (
             <AutoVocabModal
@@ -1692,6 +1780,369 @@
               Anlamını Göster
             </button>
           )}
+        </div>
+      );
+    }
+
+    // --- SINAV TARZI SORULAR (YÖKDİL formatı; kendi metin ve kartlarınızdan, API anahtarı gerektirmez) ---
+    const shuffleArr = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+    const pickN = (a, n) => shuffleArr(a).slice(0, n);
+    const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const plainText = (t) => String(t || '').replace(/^##\s+.*$/gm, '').replace(/\s+\n/g, '\n');
+    const splitSentences = (t) => (t.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+["”’)]?/g) || []).map(s => s.trim()).filter(s => s.split(' ').length >= 6 && s.split(' ').length <= 45);
+    const firstMeaning = (c) => String(c.turkish || '').split(/[,;]/)[0].trim();
+
+    // Kelimeyi cümledeki çekime uydur (assemble + "d" → assembled, study + "ies" → studies)
+    const inflectLike = (word, suffix) => {
+      const w = word.toLowerCase();
+      if (!suffix) return w;
+      if (/^(d|ed)$/.test(suffix)) return /e$/.test(w) ? w + 'd' : /[^aeiou]y$/.test(w) ? w.slice(0, -1) + 'ied' : w + 'ed';
+      if (/^(s|es|ies)$/.test(suffix)) return /[^aeiou]y$/.test(w) ? w.slice(0, -1) + 'ies' : /(s|x|z|ch|sh)$/.test(w) ? w + 'es' : w + 's';
+      if (suffix === 'ing') return /[^e]e$/.test(w) ? w.slice(0, -1) + 'ing' : w + 'ing';
+      return w + suffix;
+    };
+    // Cümlede kartın geçtiği biçimi ve eki bul
+    const findForm = (sentence, lemma) => {
+      const l = lemma.toLowerCase();
+      const stems = [l, /e$/.test(l) ? l.slice(0, -1) : null, /y$/.test(l) ? l.slice(0, -1) : null].filter(Boolean);
+      for (const st of stems) {
+        const m = sentence.match(new RegExp('\\b(' + escRe(st) + '[a-z]{0,4})\\b', 'i'));
+        if (m) {
+          const form = m[1];
+          if (!form.toLowerCase().startsWith(l) && !/^(d|ed|s|es|ies|ing|ied)$/.test(form.toLowerCase().slice(st.length))) continue;
+          let suffix = form.toLowerCase().slice(l.length);
+          if (!form.toLowerCase().startsWith(l)) suffix = form.toLowerCase().slice(st.length);
+          if (suffix === 'ied') suffix = 'ed';
+          return { form, suffix, index: m.index };
+        }
+      }
+      return null;
+    };
+
+    const LINKERS = {
+      'zıtlık': ['however', 'although', 'even though', 'whereas', 'nevertheless', 'nonetheless', 'despite', 'in spite of', 'on the other hand', 'in contrast', 'though'],
+      'sebep-sonuç': ['therefore', 'thus', 'hence', 'consequently', 'as a result', 'because', 'because of', 'due to', 'since'],
+      'ekleme': ['moreover', 'furthermore', 'in addition', 'besides', 'additionally'],
+      'örnekleme': ['for example', 'for instance', 'such as'],
+      'koşul': ['unless', 'provided that', 'as long as', 'in case'],
+      'benzerlik': ['similarly', 'likewise'],
+      'amaç': ['in order to', 'so that', 'so as to'],
+    };
+    const LINKER_LIST = Object.entries(LINKERS).flatMap(([cat, ws]) => ws.map(w => ({ w, cat })));
+
+    const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+    const makeQ = (type, prompt, options, correct, explain, extra) => {
+      const opts = shuffleArr(options);
+      return { type, prompt, options: opts, answer: opts.indexOf(correct), explain, ...(extra || {}) };
+    };
+
+    function genVocabQuestions(cards, n) {
+      const usable = cards.filter(c => c.originalSentence && !isMissingMeaning(c) && findForm(c.originalSentence, c.lemma || c.english));
+      if (usable.length < 1 || cards.length < 5) return [];
+      return pickN(usable, n).map(c => {
+        const lemma = (c.lemma || c.english).toLowerCase();
+        const f = findForm(c.originalSentence, lemma);
+        const blanked = c.originalSentence.slice(0, f.index) + '----' + c.originalSentence.slice(f.index + f.form.length);
+        const others = cards.filter(x => (x.lemma || x.english).toLowerCase() !== lemma && /^[a-z]+$/i.test(x.lemma || x.english));
+        const samePos = others.filter(x => x.partOfSpeech === c.partOfSpeech);
+        const pool = [...pickN(samePos, 4), ...pickN(others.filter(x => !samePos.includes(x)), 4)].slice(0, 4);
+        if (pool.length < 4) return null;
+        const correct = f.form.toLowerCase();
+        const opts = [correct, ...pool.map(x => inflectLike(x.lemma || x.english, f.suffix))];
+        if (new Set(opts).size < 5) return null;
+        return makeQ('Kelime', blanked, opts, correct,
+          '"' + lemma + '" = ' + c.turkish + '. Cümle: "' + c.originalSentence + '"',
+          { cardIds: [c.id] });
+      }).filter(Boolean);
+    }
+
+    function genLinkerQuestions(readings, n) {
+      const found = [];
+      readings.forEach(r => splitSentences(plainText(r.content)).forEach(s => {
+        const hits = LINKER_LIST.filter(L => new RegExp('\\b' + escRe(L.w) + '\\b', 'i').test(s));
+        // tek bir bağlaç içeren cümleler (çok anlamlı olmasın); uzun ifadeyi kısaya tercih et
+        const longest = hits.sort((a, b) => b.w.length - a.w.length)[0];
+        if (!longest) return;
+        const others = hits.filter(h => !longest.w.includes(h.w));
+        if (others.length) return;
+        found.push({ s, L: longest, title: r.title });
+      }));
+      return pickN(found, n).map(({ s, L }) => {
+        const m = s.match(new RegExp('\\b' + escRe(L.w) + '\\b', 'i'));
+        const atStart = m.index === 0;
+        const cap = (w) => atStart ? w.charAt(0).toUpperCase() + w.slice(1) : w;
+        const blanked = s.slice(0, m.index) + '----' + s.slice(m.index + m[0].length);
+        const otherCats = Object.keys(LINKERS).filter(c => c !== L.cat);
+        const distract = pickN(otherCats, 4).map(cat => pickN(LINKERS[cat], 1)[0]);
+        const correct = cap(L.w);
+        return makeQ('Bağlaç', blanked, [correct, ...distract.map(cap)], correct,
+          '"' + L.w + '" bir ' + L.cat + ' ifadesidir; cümlenin iki kısmı arasındaki ' + L.cat + ' ilişkisini kurar.');
+      });
+    }
+
+    function genIrrelevantQuestions(readings, n) {
+      const paras = [];
+      readings.forEach(r => plainText(r.content).split(/\n\s*\n/).forEach(p => {
+        const ss = splitSentences(p);
+        if (ss.length >= 5) paras.push({ ss, rid: r.id });
+      }));
+      const allSent = readings.map(r => ({ rid: r.id, ss: splitSentences(plainText(r.content)) }));
+      const out = [];
+      for (const p of pickN(paras, n * 2)) {
+        const foreign = allSent.filter(x => x.rid !== p.rid && x.ss.length).flatMap(x => x.ss);
+        if (!foreign.length) continue;
+        const start = Math.floor(Math.random() * (p.ss.length - 4));
+        const five = p.ss.slice(start, start + 5);
+        const pos = 1 + Math.floor(Math.random() * 4);           // ilk cümle hiçbir zaman değişmez
+        five[pos] = pickN(foreign, 1)[0];
+        const text = five.map((s, i) => '(' + ['I', 'II', 'III', 'IV', 'V'][i] + ') ' + s).join(' ');
+        const opts = ['I', 'II', 'III', 'IV', 'V'];
+        out.push({ type: 'Anlamı bozan cümle', prompt: 'Aşağıdaki parçada anlam bütünlüğünü bozan cümle hangisidir?\n\n' + text, options: opts, answer: pos, explain: '(' + opts[pos] + ') numaralı cümle başka bir metinden alındı; paragrafın konusuyla ilgisi yok.' });
+        if (out.length >= n) break;
+      }
+      return out;
+    }
+
+    function genMeaningQuestions(cards, n) {
+      const usable = cards.filter(c => !isMissingMeaning(c) && firstMeaning(c));
+      if (usable.length < 5) return [];
+      return pickN(usable, n).map(c => {
+        const correct = firstMeaning(c);
+        const others = [...new Set(usable.filter(x => x.id !== c.id).map(firstMeaning).filter(m => m && m !== correct))];
+        if (others.length < 4) return null;
+        return makeQ('Türkçe karşılık', '"' + (c.lemma || c.english) + '" kelimesinin Türkçe karşılığı hangisidir?', [correct, ...pickN(others, 4)], correct,
+          (c.lemma || c.english) + ' = ' + c.turkish + (c.originalSentence ? '. Cümle: "' + c.originalSentence + '"' : ''), { cardIds: [c.id] });
+      }).filter(Boolean);
+    }
+
+    function ExamSection({ cards, readings, onMarkDifficult }) {
+      const [mode, setMode] = useState('mixed');
+      const [count, setCount] = useState(10);
+      const [qs, setQs] = useState(null);
+      const [idx, setIdx] = useState(0);
+      const [picked, setPicked] = useState({});          // soru index → seçilen şık
+      const [marked, setMarked] = useState(false);
+
+      const build = () => {
+        const per = mode === 'mixed' ? Math.ceil(count / 4) : count;
+        let list = [];
+        if (mode === 'mixed' || mode === 'vocab') list = list.concat(genVocabQuestions(cards, per));
+        if (mode === 'mixed' || mode === 'linker') list = list.concat(genLinkerQuestions(readings, per));
+        if (mode === 'mixed' || mode === 'irrelevant') list = list.concat(genIrrelevantQuestions(readings, mode === 'mixed' ? Math.max(1, Math.floor(per / 2)) : per));
+        if (mode === 'mixed' || mode === 'meaning') list = list.concat(genMeaningQuestions(cards, per));
+        list = mode === 'mixed' ? shuffleArr(list).slice(0, count) : list.slice(0, count);
+        setQs(list); setIdx(0); setPicked({}); setMarked(false);
+      };
+
+      const needs = [];
+      if (cards.length < 5) needs.push('en az 5 kelime kartı (şu an ' + cards.length + ')');
+      if (!readings.length) needs.push('en az 1 okuma metni');
+
+      if (!qs) {
+        return (
+          <div className="max-w-2xl mx-auto space-y-4">
+            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+              <h3 className="font-bold text-lg text-white">🎓 YÖKDİL Tarzı Deneme</h3>
+              <p className="text-xs text-slate-400">Sorular sizin okuma metinlerinizden ve kelime kartlarınızdan otomatik üretilir. Her soruda 5 şık vardır; cevabınızdan sonra açıklama gösterilir.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                {[['mixed', 'Karışık (önerilen)'], ['vocab', 'Kelime – boşluk doldurma'], ['linker', 'Bağlaç / geçiş ifadeleri'], ['irrelevant', 'Anlamı bozan cümle'], ['meaning', 'Türkçe karşılık']].map(([k, label]) => (
+                  <label key={k} className={"flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer " + (mode === k ? 'border-blue-600 bg-blue-600/10 text-white' : 'border-slate-800 text-slate-300')}>
+                    <input type="radio" name="examMode" checked={mode === k} onChange={() => setMode(k)} className="accent-blue-500" /> {label}
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400">Soru sayısı</span>
+                {[10, 20, 40].map(n => (
+                  <button key={n} onClick={() => setCount(n)} className={"px-3 py-1.5 rounded-lg font-bold " + (count === n ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300')}>{n}</button>
+                ))}
+              </div>
+              {needs.length > 0 && <p className="text-[11px] text-amber-400">Daha çok soru için: {needs.join(', ')}. Bağlaç ve anlamı bozan cümle soruları okuma metinlerinden üretilir (ikincisi için en az 2 metin gerekir).</p>}
+              <button onClick={build} className="w-full py-3 rounded-xl bg-blue-600 text-white font-bold text-sm hover:bg-blue-500">Sınavı Başlat</button>
+            </div>
+          </div>
+        );
+      }
+
+      if (!qs.length) {
+        return (
+          <div className="max-w-2xl mx-auto bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-3 text-center">
+            <p className="text-sm text-slate-300">Bu türde soru üretilecek kadar veri yok.</p>
+            <p className="text-xs text-slate-500">Okuma metni yükleyip "✨ Kelimeleri Çıkar" ile kelime ekleyin; sonra tekrar deneyin.</p>
+            <button onClick={() => setQs(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-200">Geri</button>
+          </div>
+        );
+      }
+
+      const answered = Object.keys(picked).length;
+      const correctN = qs.filter((q, i) => picked[i] === q.answer).length;
+      const done = answered === qs.length && idx >= qs.length;
+
+      if (done) {
+        const wrongCardIds = [...new Set(qs.flatMap((q, i) => picked[i] !== q.answer ? (q.cardIds || []) : []))];
+        const byType = {};
+        qs.forEach((q, i) => { byType[q.type] = byType[q.type] || [0, 0]; byType[q.type][1]++; if (picked[i] === q.answer) byType[q.type][0]++; });
+        return (
+          <div className="max-w-2xl mx-auto bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+            <h3 className="font-bold text-lg text-white">Sonuç: {correctN} / {qs.length} <span className="text-slate-400 text-sm">(%{Math.round(correctN / qs.length * 100)})</span></h3>
+            <div className="space-y-1 text-xs">
+              {Object.entries(byType).map(([t, [c, n]]) => <p key={t} className="text-slate-300">{t}: <b className={c === n ? 'text-emerald-400' : 'text-amber-300'}>{c}/{n}</b></p>)}
+            </div>
+            {wrongCardIds.length > 0 && (
+              <button disabled={marked} onClick={() => { onMarkDifficult(wrongCardIds); setMarked(true); }} className="px-4 py-2 rounded-lg bg-amber-600 text-xs font-bold text-white disabled:opacity-60">
+                {marked ? '✓ Zorlandığım Kelimeler\'e eklendi' : 'Yanlış yaptığım ' + wrongCardIds.length + ' kelimeyi "Zorlandığım Kelimeler"e ekle'}
+              </button>
+            )}
+            <div className="flex gap-2">
+              <button onClick={build} className="px-4 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white">Yeni sınav</button>
+              <button onClick={() => setQs(null)} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-200">Ayarlar</button>
+            </div>
+          </div>
+        );
+      }
+
+      const q = qs[idx];
+      const my = picked[idx];
+      const isAnswered = my !== undefined;
+      return (
+        <div className="max-w-2xl mx-auto space-y-3">
+          <div className="flex items-center justify-between text-xs text-slate-400">
+            <span>Soru {idx + 1} / {qs.length} · <span className="text-blue-300 font-bold">{q.type}</span></span>
+            <span>Doğru: {correctN} / {answered}</span>
+          </div>
+          <div className="h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: (idx / qs.length * 100) + '%' }} /></div>
+          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+            <p className="text-sm text-slate-100 font-serif leading-relaxed whitespace-pre-wrap">{q.prompt}</p>
+            <div className="space-y-2">
+              {q.options.map((o, i) => {
+                const state = !isAnswered ? 'idle' : i === q.answer ? 'right' : i === my ? 'wrong' : 'dim';
+                const cls = { idle: 'border-slate-700 hover:border-blue-500 hover:bg-slate-900', right: 'border-emerald-500 bg-emerald-600/15 text-emerald-200', wrong: 'border-red-500 bg-red-600/15 text-red-200', dim: 'border-slate-800 text-slate-500' }[state];
+                return (
+                  <button key={i} disabled={isAnswered} onClick={() => setPicked({ ...picked, [idx]: i })}
+                          className={"w-full text-left px-4 py-2.5 rounded-xl border text-sm transition " + cls}>
+                    <b className="mr-2">{LETTERS[i]})</b>{o}
+                  </button>
+                );
+              })}
+            </div>
+            {isAnswered && (
+              <div className={"p-3 rounded-xl text-xs " + (my === q.answer ? 'bg-emerald-950/50 text-emerald-200' : 'bg-red-950/40 text-red-200')}>
+                <b>{my === q.answer ? '✓ Doğru!' : '✗ Yanlış. Doğru cevap: ' + LETTERS[q.answer] + ') ' + q.options[q.answer]}</b>
+                <p className="mt-1 text-slate-300">{q.explain}</p>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <button onClick={() => setQs(null)} className="text-xs text-slate-500 hover:text-slate-300">Sınavı bitir</button>
+              <button disabled={!isAnswered} onClick={() => setIdx(idx + 1)} className="px-5 py-2 rounded-lg bg-blue-600 text-xs font-bold text-white disabled:opacity-40">
+                {idx + 1 < qs.length ? 'Sonraki →' : 'Sonucu gör'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Okuma ekranında tıklanan kelimenin anlam kutusu (anlam, okunuş, ses, eş/zıt anlam, karta ekle)
+    function WordPopover({ pop, cards, onAdd, onClose }) {
+      const [info, setInfo] = useState(null);
+      const [state, setState] = useState('loading');      // loading | ok | error
+      const boxRef = useRef(null);
+
+      useEffect(() => {
+        let alive = true;
+        setState('loading'); setInfo(null);
+        (async () => {
+          try {
+            const raw = pop.word.toLowerCase();
+            const r = await resolveLemma(raw).catch(() => null);
+            let lemma = r ? r.word : raw;
+            let pos = r ? posFor(lemma, [raw], r.info.tags) : null;
+            if (!r) {
+              // Datamuse yanıt vermezse: kök adaylarını sözlükte (dictionaryapi.dev) doğrula
+              for (const c of lemmaCandidates(raw).slice(1)) {
+                const j = await fetchJson('https://api.dictionaryapi.dev/api/v2/entries/en/' + encodeURIComponent(c)).catch(() => null);
+                if (Array.isArray(j) && j.length) { lemma = c; break; }
+              }
+              if (lemma !== raw && /(ed|ing)$/.test(raw)) pos = 'verb';
+            }
+            const d = await fetchWordDetails(lemma, pos || 'noun');
+            if (alive) { setInfo({ ...d, lemma, pos: d.partOfSpeech || pos }); setState('ok'); }
+          } catch (e) { if (alive) setState('error'); }
+        })();
+        return () => { alive = false; };
+      }, [pop.word]);
+
+      // Esc veya dışarı tıklayınca kapan
+      useEffect(() => {
+        const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+        const onDown = (e) => { if (boxRef.current && !boxRef.current.contains(e.target) && !e.target.closest('[data-reader]')) onClose(); };
+        const onScroll = (e) => { if (!boxRef.current || !boxRef.current.contains(e.target)) onClose(); };
+        document.addEventListener('keydown', onKey);
+        document.addEventListener('mousedown', onDown);
+        document.addEventListener('scroll', onScroll, true);
+        return () => {
+          document.removeEventListener('keydown', onKey);
+          document.removeEventListener('mousedown', onDown);
+          document.removeEventListener('scroll', onScroll, true);
+        };
+      }, []);
+
+      const lemma = info ? info.lemma : pop.word.toLowerCase();
+      const existing = cards.find(c => String(c.lemma || c.english).toLowerCase() === lemma);
+      const W = 320;
+      const left = Math.max(8, Math.min(window.innerWidth - W - 8, pop.x - W / 2));
+      const below = pop.y + 300 < window.innerHeight;
+      const style = below ? { left, top: pop.y + 8, width: W } : { left, bottom: window.innerHeight - pop.top + 8, width: W };
+
+      return (
+        <div ref={boxRef} role="dialog" aria-label={'"' + pop.word + '" kelimesinin anlamı'} style={style}
+             className="fixed z-50 rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl p-4 space-y-2 text-left font-sans">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-lg font-black text-white">{lemma}</span>
+                {info && info.lemma !== pop.word.toLowerCase() && <span className="text-[10px] text-slate-500">({pop.word})</span>}
+                {info && info.pos && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">{info.pos}</span>}
+              </div>
+              {info && (info.ipa || info.okunus) && (
+                <p className="text-[11px] text-slate-400">
+                  {info.ipa && <span className="font-mono">/{info.ipa}/</span>}
+                  {info.okunus && <span className="text-amber-300 ml-1.5">[{info.okunus}]</span>}
+                </p>
+              )}
+            </div>
+            <button onClick={() => playWord({ english: lemma, audioUrl: info && info.audioUrl })} aria-label={lemma + ' telaffuzunu dinle'} className="px-1.5 py-1 rounded-md text-blue-400 hover:bg-slate-800">🔊</button>
+            <button onClick={onClose} aria-label="Kapat" className="px-1.5 py-1 rounded-md text-slate-500 hover:bg-slate-800">✕</button>
+          </div>
+
+          {state === 'loading' && <p className="text-xs text-slate-500">Anlam aranıyor…</p>}
+          {state === 'error' && <p className="text-xs text-red-400">Bağlantı hatası; anlam getirilemedi.</p>}
+          {state === 'ok' && (
+            <>
+              <p className={"text-sm font-bold " + (info.turkish ? 'text-blue-300' : 'text-amber-400')}>
+                {existing && !isMissingMeaning(existing) ? existing.turkish : (info.turkish || 'Otomatik anlam bulunamadı')}
+              </p>
+              {(info.trSenses || []).length > 1 && info.trSenses.slice(0, 2).map((s, i) => (
+                <p key={i} className="text-[10px] text-slate-400">{s.sense && <span className="italic">{s.sense}: </span>}<span className="text-blue-200">{s.words.join(', ')}</span></p>
+              ))}
+              {info.definition && <p className="text-[11px] text-slate-400 line-clamp-2"><span className="text-slate-500">EN:</span> {info.definition}</p>}
+              {(info.synonyms || []).length > 0 && <p className="text-[11px]"><span className="text-slate-500">Eş:</span> <span className="text-emerald-300">{info.synonyms.slice(0, 4).join(', ')}</span></p>}
+              {(info.antonyms || []).length > 0 && <p className="text-[11px]"><span className="text-slate-500">Zıt:</span> <span className="text-red-300">{info.antonyms.slice(0, 3).join(', ')}</span></p>}
+            </>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            {existing ? (
+              <span className="text-[11px] font-bold text-emerald-400">✓ Kelime bankanızda var</span>
+            ) : (
+              <button
+                disabled={state === 'loading'}
+                onClick={() => onAdd(info || { lemma, pos: 'noun' }, pop)}
+                className="px-3 py-1.5 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-500 disabled:opacity-50"
+              >+ Karta ekle</button>
+            )}
+            <TurengLink word={lemma} className="ml-auto" />
+          </div>
         </div>
       );
     }
