@@ -394,34 +394,64 @@
     // --- YÖKDİL ÇIKMIŞ SINAV & DENEME AYRIŞTIRICI (EXAM PARSER) ---
     const EXAM_LETTERS = ['A', 'B', 'C', 'D', 'E'];
 
-    // Soru numarasına göre YÖKDİL bölümü
+    // Soru tipleri. Her sınavın bölümleri PDF'teki "x. – y. sorularda …" talimatlarından çıkarılır
+    // (YÖKDİL ve YDS'de sıra ve sayılar farklıdır). Talimat yoksa gerçek YÖKDİL düzeni varsayılır.
+    const QTYPES = ['Kelime & Dil Bilgisi', 'Cloze Test', 'Cümle Tamamlama', 'Soru Bulma', 'Çeviri (İng→Tr)', 'Çeviri (Tr→İng)', 'Okuma', 'Yakın Anlam', 'Paragraf Tamamlama', 'Durum', 'Diyalog', 'Anlam Bütünlüğü'];
+    const YOKDIL_DEFAULT = [[1, 20, 'Kelime & Dil Bilgisi'], [21, 30, 'Cloze Test'], [31, 41, 'Cümle Tamamlama'], [42, 47, 'Çeviri (İng→Tr)'], [48, 53, 'Çeviri (Tr→İng)'], [54, 59, 'Paragraf Tamamlama'], [60, 65, 'Anlam Bütünlüğü'], [66, 80, 'Okuma']];
     function yokdilCategory(num) {
-      if (num <= 6) return 'Kelime Soruları (Soru 1-6)';
-      if (num <= 16) return 'Gramer & Edat (Soru 7-16)';
-      if (num <= 26) return 'Cloze Test (Soru 17-26)';
-      if (num <= 36) return 'Cümle Tamamlama (Soru 27-36)';
-      if (num <= 48) return 'Çeviri Soruları (Soru 37-48)';
-      if (num <= 60) return 'Paragraf & Anlam Bütünlüğü (Soru 49-60)';
-      return 'Okuma Parçası Soruları (Soru 61-80)';
+      const r = YOKDIL_DEFAULT.find(([a, b]) => num >= a && num <= b);
+      return r ? r[2] : 'Okuma';
     }
-    const EXAM_SECTIONS = [
-      { label: 'Kelime', from: 1, to: 6 },
-      { label: 'Gramer & Edat', from: 7, to: 16 },
-      { label: 'Cloze Test', from: 17, to: 26 },
-      { label: 'Cümle Tamamlama', from: 27, to: 36 },
-      { label: 'Çeviri', from: 37, to: 48 },
-      { label: 'Paragraf / Anlam Bütünlüğü', from: 49, to: 60 },
-      { label: 'Okuma Parçası', from: 61, to: 80 },
-    ];
-    const examSectionOf = (num) => EXAM_SECTIONS.find(s => num >= s.from && num <= s.to) || EXAM_SECTIONS[6];
-    // Kart soru tipi filtresi: 'exam' (çıkmış sınav), '0'..'6' (bölüm), 'genel'. Eski ("Kelime Soruları (1-6)") ve yeni ("(Soru 1-6)") adları da eşleşir.
+    // Talimat cümlesinden soru tipi
+    function typeFromInstruction(text) {
+      const t = String(text || '').toLocaleLowerCase('tr');
+      if (/bozan/.test(t)) return 'Anlam Bütünlüğü';
+      if (/getirilebilecek/.test(t)) return 'Paragraf Tamamlama';
+      if (/numaralanmış/.test(t)) return 'Cloze Test';
+      if (/karşılıklı konuşma|diyalog/.test(t)) return 'Diyalog';
+      if (/durumda/.test(t)) return 'Durum';
+      if (/hangi sorunun/.test(t)) return 'Soru Bulma';
+      if (/ingilizce cümleye.*türkçe/.test(t)) return 'Çeviri (İng→Tr)';
+      if (/türkçe cümleye.*ingilizce/.test(t)) return 'Çeviri (Tr→İng)';
+      if (/parçalara göre|parçaya göre/.test(t)) return 'Okuma';
+      if (/anlamca en yakın/.test(t)) return 'Yakın Anlam';
+      if (/tamamlayan/.test(t)) return 'Cümle Tamamlama';
+      if (/sözcük ya da ifade|boş bırakılan yerlere/.test(t)) return 'Kelime & Dil Bilgisi';
+      return null;
+    }
+    // Eski kayıtlardaki adları ("Kelime Soruları (Soru 1-6)", "Gramer & Edat …") yeni tiplere çevir
+    function canonicalType(s, num) {
+      if (QTYPES.includes(s)) return s;
+      const t = String(s || '');
+      if (/Kelime|Gramer|Edat/.test(t)) return 'Kelime & Dil Bilgisi';
+      if (/Cloze/.test(t)) return 'Cloze Test';
+      if (/Cümle Tamamlama/.test(t)) return 'Cümle Tamamlama';
+      if (/Çeviri/.test(t)) return 'Çeviri (İng→Tr)';
+      if (/Okuma/.test(t)) return 'Okuma';
+      if (/Paragraf/.test(t)) return 'Paragraf Tamamlama';
+      return num ? yokdilCategory(num) : '';
+    }
+    const qSection = (q) => canonicalType(q.category, q.num);
+    // Sınavın bölümleri, soru sırasına göre: [{ label, from, to, n }]
+    function examSections(exam) {
+      const map = new Map();
+      [...(exam.questions || [])].sort((a, b) => a.num - b.num).forEach(q => {
+        const l = qSection(q);
+        const s = map.get(l) || { label: l, from: q.num, to: q.num, n: 0 };
+        s.from = Math.min(s.from, q.num); s.to = Math.max(s.to, q.num); s.n++;
+        map.set(l, s);
+      });
+      return [...map.values()].sort((a, b) => a.from - b.from);
+    }
+    // Kart filtresi: soru tipi ailesi ('Çeviri' iki yönü de kapsar)
+    const QTYPE_FILTERS = ['Kelime & Dil Bilgisi', 'Cloze Test', 'Cümle Tamamlama', 'Çeviri', 'Paragraf Tamamlama', 'Okuma'];
     const cardMatchesQType = (c, f) => {
       if (f === 'exam') return !!(c.examInfo && c.examInfo.verified);
-      const m = String(c.questionType || '').match(/(\d+)\s*-\s*(\d+)/);
-      if (f === 'genel') return !!c.questionType && !m;
-      if (!m) return false;
-      const s = EXAM_SECTIONS[+f];
-      return !!s && +m[1] >= s.from && +m[1] <= s.to;
+      if (!c.questionType) return false;
+      const t = canonicalType(c.questionType);
+      if (f === 'genel') return !t;
+      if (f === 'Çeviri') return t.startsWith('Çeviri');
+      return t === f;
     };
 
     // Cevap anahtarı: "1-A 2-C", "1.A", "1) C", "1 A" ya da yalnızca harf dizisi "ACDEB..." (1'den başlar)
@@ -440,7 +470,7 @@
     }
 
     // Sayfa başlığı/altlığı gibi soruya ait olmayan satırlar
-    const EXAM_NOISE_LINE = /^\s*(\d{1,3}|diğer sayfaya geçiniz\.?|.*soru kitapçığı.*|ösym|yökdil\s*[\/\-–].*|test bitti.*|cevaplarınızı kontrol ediniz.*|bu testte \d+ soru vardır\.?)\s*$/i;
+    const EXAM_NOISE_LINE = /^\s*(\d{1,3}|diğer sayfaya geçiniz\.?|.*soru kitapçığı.*|ösym|yökdil\s*[\/\-–].*|test bitt[iİ].*|cevaplarınızı kontrol ediniz.*|bu testte \d+ soru vardır\.?)\s*$/i;
     const EXAM_GROUP_LINE = /^\s*(\d{1,2})\s*\.?\s*[-–—]\s*(\d{1,2})\s*\.?\s*sorular/i;
 
     // Şıkları bulur: yalnızca BÜYÜK harf "A)"–"E)" ve sırayla (A→B→C→D→E). "e.g." gibi ifadeler şık sanılmaz.
@@ -469,10 +499,18 @@
       if (!text || text.trim().length < 20) return [];
       let src = text.replace(/\r\n?/g, '\n').replace(/[ \t]/g, ' ');
 
-      // Cevap anahtarı yalnızca kullanıcının girdiği alandan ya da metindeki "CEVAP ANAHTARI" bölümünden alınır
+      // Cevap anahtarı yalnızca kullanıcının girdiği alandan ya da metindeki "Cevap Anahtarı" bölümünden alınır.
+      // Başlık metinde birkaç kez geçebilir ("…sonundaki Cevap Anahtarı ile karşılaştır"); ardından gerçekten
+      // "1. E 2. C …" dizisi gelen ilk başlık seçilir.
       let keySection = '';
-      const keyIdx = src.search(/CEVAP\s+ANAHTARI/i);
-      if (keyIdx >= 0) { keySection = src.slice(keyIdx).replace(/CEVAP\s+ANAHTARI/i, ''); src = src.slice(0, keyIdx); }
+      for (const m of src.matchAll(/cevap\s+anahtar[ıi]/gi)) {
+        const after = src.slice(m.index + m[0].length, m.index + m[0].length + 800);
+        if ((after.match(/(?:^|\s)\d{1,2}\s*[-.:)]?\s*[A-E](?![A-Za-z])/g) || []).length >= 8) {
+          keySection = src.slice(m.index + m[0].length);
+          src = src.slice(0, m.index);
+          break;
+        }
+      }
       const answersMap = parseAnswerKey(answerKeyText);
       if (!answersMap.size && keySection) parseAnswerKey(keySection).forEach((v, k) => answersMap.set(k, v));
 
@@ -496,8 +534,14 @@
         if (g) groups.push({ from: +g[1], to: +g[2], line: i });
       });
       const isGroupLine = new Set(groups.map(g => g.line));
-      // Talimat cümlesi bir sonraki satıra taşmış olabilir ("...parçaya göre\ncevaplayınız.")
-      groups.forEach(g => { if (/^\s*(cevaplayınız|yanıtlayınız)\.?\s*$/i.test(lines[g.line + 1] || '')) isGroupLine.add(g.line + 1); });
+      // Talimat cümlesi bir sonraki satıra taşmış olabilir ("...parçaya göre\ncevaplayınız.", "...cümleyi\nbulunuz.")
+      groups.forEach(g => { if (/^\s*(cevaplayınız|yanıtlayınız|bulunuz)\.?\s*$/i.test(lines[g.line + 1] || '')) isGroupLine.add(g.line + 1); });
+      // Soru tipleri talimatlardan: önce geniş aralıklar, sonra dar aralıklar (alt gruplar) üzerine yazar
+      const typeByNum = {};
+      [...groups].sort((a, b) => (b.to - b.from) - (a.to - a.from)).forEach(g => {
+        const t = typeFromInstruction(lines[g.line] + ' ' + (isGroupLine.has(g.line + 1) ? lines[g.line + 1] : ''));
+        if (t) for (let n = g.from; n <= g.to; n++) typeByNum[n] = t;
+      });
 
       const passages = {};
       groups.forEach(g => {
@@ -535,7 +579,7 @@
           prompt: flat(sp.prompt),
           options: EXAM_LETTERS.map((_, i) => flat(opts[i] || '')),
           answer: correctLetter ? EXAM_LETTERS.indexOf(correctLetter) : -1,
-          category: yokdilCategory(q.n),
+          category: typeByNum[q.n] || yokdilCategory(q.n),
           correctLetter,
         });
       });
@@ -583,7 +627,7 @@
           const page = await pdf.getPage(p);
           const vp = page.getViewport({ scale: 1 });
           const tc = await page.getTextContent();
-          const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ s: it.str, x: it.transform[4], y: vp.height - it.transform[5], w: it.width || 0, h: Math.abs(it.transform[3]) || 10 }));
+          const items = tc.items.filter(it => it.str).map(it => ({ s: it.str, x: it.transform[4], y: vp.height - it.transform[5], w: it.width || 0, h: Math.abs(it.transform[3]) || 10 }));
           const chars = items.reduce((a, it) => a + it.s.replace(/\s/g, '').length, 0);
           // Taranmış sayfa: (neredeyse) hiç metin yok ya da az metin + sayfada resim var
           let scanned = chars < 15;
@@ -615,35 +659,71 @@
               const { data } = await worker.recognize(canvas, { rectangle: { left: x0, top: 0, width: x1 - x0, height: canvas.height } });
               parts.push(data.text);
             }
-            pages.push(parts.join('\n'));
+            pages.push(parts.join('\n').split('\n'));
             continue;
           }
-          // Sütun tespiti: sayfanın ortasını kesen satır yoksa ve iki yanda da metin varsa iki sütun
+          // Satırları kur: aynı yükseklikteki parçalar bir satır. Sayfanın ortasından kesintisiz geçen satırlar
+          // (talimat bantları, tam genişlikli metin) "bant ayırıcı" sayılır; aradaki bölgeler önce sol, sonra sağ sütun okunur.
           const mid = vp.width / 2;
-          const crossing = items.filter(it => it.x < mid - 8 && it.x + it.w > mid + 8).length;
-          const left = items.filter(it => it.x + it.w / 2 < mid), right = items.filter(it => it.x + it.w / 2 >= mid);
-          const twoCol = crossing <= Math.max(2, items.length * 0.03) && left.length > 5 && right.length > 5;
-          const out = [];
-          for (const col of (twoCol ? [left, right] : [items])) {
-            col.sort((a, b) => a.y - b.y || a.x - b.x);
-            let line = [], lineY = null, lastY = null;
-            const flush = () => { if (line.length) { line.sort((a, b) => a.x - b.x); out.push(line.map(t => t.s).join(' ').replace(/\s{2,}/g, ' ')); line = []; } };
-            for (const it of col) {
-              if (lineY === null || Math.abs(it.y - lineY) > Math.max(3, it.h * 0.5)) {
-                flush();
-                if (lastY !== null && it.y - lastY > it.h * 1.9) out.push(''); // paragraf boşluğu
-                lineY = it.y;
-              }
-              line.push(it); lastY = it.y;
-            }
-            flush();
+          items.sort((a, b) => a.y - b.y || a.x - b.x);
+          const rows = [];
+          for (const it of items) {
+            const r = rows[rows.length - 1];
+            if (r && Math.abs(it.y - r.y) <= Math.max(2.5, it.h * 0.45)) r.items.push(it);
+            else rows.push({ y: it.y, h: it.h, items: [it] });
           }
-          pages.push(out.join('\n'));
+          // Parçaları birleştir: bitişikse boşluksuz ("a"+"ş"+"a"+"ğ"), genişçe boşluk karakteri = soru boşluğu (----)
+          const joinItems = (arr) => {
+            arr.sort((a, b) => a.x - b.x);
+            let s = '', end = null;
+            for (const t of arr) {
+              const blank = !t.s.trim() && t.w > Math.max(18, t.h * 2.2);
+              const piece = blank ? ' ---- ' : t.s;
+              if (end !== null && t.x - end > 1.2 && !/\s$/.test(s) && !/^\s/.test(piece)) s += ' ';
+              s += piece;
+              end = t.x + t.w;
+            }
+            return s.replace(/\s+/g, ' ').trim();
+          };
+          const spans = (r) => {
+            const its = r.items.filter(t => t.s.trim() || t.w > 0).sort((a, b) => a.x - b.x);
+            if (its.some(t => t.x < mid - 4 && t.x + t.w > mid + 4)) return true;
+            for (let k = 1; k < its.length; k++) {
+              const a = its[k - 1], b = its[k];
+              if (a.x + a.w <= mid + 4 && b.x >= mid - 4 && b.x - (a.x + a.w) < 6) return true;
+            }
+            return false;
+          };
+          const out = [];
+          let band = { left: [], right: [] };
+          const pushCol = (col) => {
+            let lastY = null;
+            col.forEach(({ y, h, text }) => {
+              if (!text) return;
+              if (lastY !== null && y - lastY > h * 1.9) out.push('');
+              out.push(text); lastY = y;
+            });
+          };
+          const flushBand = () => { pushCol(band.left); pushCol(band.right); band = { left: [], right: [] }; };
+          for (const r of rows) {
+            if (spans(r)) { flushBand(); out.push(joinItems(r.items)); continue; }
+            const L = r.items.filter(t => t.x + t.w / 2 < mid), R = r.items.filter(t => t.x + t.w / 2 >= mid);
+            if (L.length) band.left.push({ y: r.y, h: r.h, text: joinItems(L) });
+            if (R.length) band.right.push({ y: r.y, h: r.h, text: joinItems(R) });
+          }
+          flushBand();
+          pages.push(out);
         }
       } finally {
         if (worker) { try { await worker.terminate(); } catch (e) {} }
       }
-      return { text: pages.join('\n\n'), pages: pdf.numPages, ocrPages };
+      // Her sayfada tekrarlanan başlık / altlık satırlarını at (sayfa numarası farkı yok sayılır). Şıklar ("A) I") korunur.
+      const norm = (l) => l.toLowerCase().replace(/\d+/g, '#').replace(/[\s()·|]/g, '');
+      const freq = new Map();
+      pages.forEach(lines => new Set(lines.map(norm)).forEach(k => k && freq.set(k, (freq.get(k) || 0) + 1)));
+      const minRep = Math.max(3, Math.ceil(pages.length * 0.25));
+      const isRepeated = (l) => l.trim() && !/^\s*([A-E]\)|\d{1,2}\s*[.)])/.test(l) && (freq.get(norm(l)) || 0) >= minRep;
+      return { text: pages.map(lines => lines.filter(l => !isRepeated(l)).join('\n')).join('\n\n'), pages: pdf.numPages, ocrPages };
     }
 
     // --- OTOMATİK KELİME ÇIKARMA VE SÖZLÜK ---
@@ -1414,7 +1494,7 @@
       useEffect(() => { persist(STORAGE_KEYS.EXAMS, customExams); }, [customExams]);
 
       const handleExtractVocabFromExam = async (exam) => {
-        const vocabQs = exam.questions.filter(q => q.num <= 6 || q.category.includes('Kelime'));
+        const vocabQs = exam.questions.filter(q => qSection(q) === 'Kelime & Dil Bilgisi');
         if (!vocabQs.length) {
           showToast('Bu sınavda ayrıştırılmış kelime sorusu bulunamadı.', true);
           return;
@@ -1426,7 +1506,7 @@
         vocabQs.forEach(q => q.options.forEach((opt, idx) => {
           const surface = opt.trim().replace(/[.,;]+$/, '');
           const clean = surface.toLowerCase().replace(/[^a-z\s-]/g, '').replace(/\s+/g, ' ').trim();
-          if (clean.length < 3 || clean.split(' ').length > 3 || STOPWORDS.has(clean) || seen.has(clean)) return;
+          if (surface.includes('/') || clean.length < 3 || clean.split(' ').length > 3 || STOPWORDS.has(clean) || seen.has(clean)) return;
           seen.add(clean);
           const isCorrect = q.answer === idx;
           items.push({ surface, clean, isCorrect, sentence: isCorrect ? q.prompt.replace(/-{3,}/, surface) : q.prompt, num: q.num });
@@ -1459,7 +1539,7 @@
             synonyms: d.synonyms || [], antonyms: d.antonyms || [],
             partOfSpeech: d.partOfSpeech || 'noun',
             originalSentence: r.it.sentence,
-            questionType: 'Kelime Soruları (Soru 1-6)',
+            questionType: 'Kelime & Dil Bilgisi',
             sourceType: 'verified_exam',
             examInfo: { examId: exam.id, title: exam.title, year: exam.year, term: exam.term, field: exam.field, num: r.it.num, wasAnswer: r.it.isCorrect, verified: true },
             ...(sub ? { awl: sub } : {}),
@@ -1470,7 +1550,7 @@
         if (dupLemmas.length) {
           const set = new Set(dupLemmas);
           setCards(prev => prev.map(c => set.has(String(c.lemma || c.english).toLowerCase()) && c.sourceType !== 'verified_exam'
-            ? { ...c, questionType: c.questionType || 'Kelime Soruları (Soru 1-6)', examInfo: { examId: exam.id, title: exam.title, year: exam.year, term: exam.term, field: exam.field, verified: true }, examTagged: true, updatedAt: now } : c));
+            ? { ...c, questionType: c.questionType || 'Kelime & Dil Bilgisi', examInfo: { examId: exam.id, title: exam.title, year: exam.year, term: exam.term, field: exam.field, verified: true }, examTagged: true, updatedAt: now } : c));
         }
         if (newCards.length) {
           setCards(prev => [...newCards, ...prev]);
@@ -1599,6 +1679,23 @@
       useEffect(() => { persist(STORAGE_KEYS.VOCAB, cards); }, [cards]);
       useEffect(() => { persist(STORAGE_KEYS.SETTINGS, settings); }, [settings]);
       useEffect(() => { persist(STORAGE_KEYS.ACTIVITY, activity); }, [activity]);
+
+      // Kelime listesinden sırada bekleyenler: her gün belirlenen sayıda kelime tekrara eklenir (günde bir kez)
+      const [isWordListOpen, setIsWordListOpen] = useState(false);
+      const [bankLimit, setBankLimit] = useState(60);
+      const [bankQuery, setBankQuery] = useState('');
+      const bankList = bankQuery.trim() ? cards.filter(c => (c.english + ' ' + (c.turkish || '')).toLocaleLowerCase('tr').includes(bankQuery.trim().toLocaleLowerCase('tr'))) : cards;
+      useEffect(() => {
+        const today = getTodayStr();
+        if (settings.listReleaseDay === today) return;
+        const queued = cards.filter(c => c.queued);
+        if (!queued.length) return;
+        const n = settings.dailyListNew == null ? 10 : settings.dailyListNew;
+        const pick = new Set(queued.sort((a, b) => (a.queueOrder || 0) - (b.queueOrder || 0)).slice(0, n).map(c => c.id));
+        const now = new Date().toISOString();
+        if (pick.size) setCards(prev => prev.map(c => pick.has(c.id) ? { ...c, queued: false, srs: { ...c.srs, nextReviewAt: today }, updatedAt: now } : c));
+        setSettings(s => ({ ...s, listReleaseDay: today }));
+      }, [cards.length, settings.listReleaseDay]);
 
       // Hesaplamalar
       const today = getTodayStr();
@@ -2145,7 +2242,7 @@
                     const graded = rows.filter(r => r.graded);
                     const correct = graded.filter(r => r.ok).length;
                     const byType = {};
-                    graded.forEach(r => { const t = examSectionOf(r.num).label; byType[t] = byType[t] || [0, 0]; byType[t][1]++; if (r.ok) byType[t][0]++; });
+                    graded.forEach(r => { const t = r.section; byType[t] = byType[t] || [0, 0]; byType[t][1]++; if (r.ok) byType[t][0]++; });
                     if (graded.length) logActivity({ examQ: graded.length, examCorrect: correct, realExams: 1 }, byType, { [ex.field || 'Genel']: [correct, graded.length] });
                     const summary = { ...attempt, correct, graded: graded.length, empty: rows.filter(r => r.empty).length };
                     setCustomExams(prev => prev.map(e => e.id === ex.id ? { ...e, attempts: [summary, ...(e.attempts || [])].slice(0, 10), updatedAt: new Date().toISOString() } : e));
@@ -2174,6 +2271,7 @@
                   onUpdate={(updated) => setCards(prev => prev.map(c => c.id === updated.id ? updated : c))}
                   onUpdateMany={(list) => { const m = new Map(list.map(c => [c.id, c])); setCards(prev => prev.map(c => m.get(c.id) || c)); }}
                   onAudio={() => setAudioOpen(true)}
+                  onImportList={() => setIsWordListOpen(true)}
                   onDelete={(id) => {
                     const word = (cards.find(c => c.id === id) || {}).english;
                     setCards(prev => prev.filter(c => c.id !== id));
@@ -2189,7 +2287,9 @@
               {activeTab === 'bank' && (
                 <div className="space-y-4">
                   <div className="flex justify-between items-center">
-                    <h3 className="font-bold text-lg text-white">Kelime Bankası ({cards.length})</h3>
+                    <h3 className="font-bold text-lg text-white mr-auto">Kelime Bankası ({cards.length})</h3>
+                    <input type="search" value={bankQuery} onChange={e => { setBankQuery(e.target.value); setBankLimit(60); }} placeholder="Ara…" aria-label="Kelime bankasında ara" className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white w-32 mr-2" />
+                    <button onClick={() => setIsWordListOpen(true)} className="px-3 py-1.5 rounded-lg bg-emerald-700 text-xs font-bold text-white mr-2">📥 Liste içe aktar</button>
                     <button
                       onClick={() => {
                         const q = (v) => '"' + String(Array.isArray(v) ? v.join('; ') : (v || '')).replace(/"/g, '""') + '"';
@@ -2205,7 +2305,7 @@
                     </button>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {cards.map(c => (
+                    {bankList.slice(0, bankLimit).map(c => (
                       <div key={c.id} className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-950 text-blue-300">{c.partOfSpeech}</span>
@@ -2235,6 +2335,9 @@
                       </div>
                     ))}
                   </div>
+                  {bankList.length > bankLimit && (
+                    <button onClick={() => setBankLimit(bankLimit + 60)} className="w-full py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 hover:bg-slate-800">Daha fazla göster ({bankLimit} / {bankList.length})</button>
+                  )}
                 </div>
               )}
 
@@ -2367,6 +2470,22 @@
                            setInitialWord(phrase); setInitialSentence(sentence || ''); setEditingCard(null); setIsVocabModalOpen(true);
                          }}
                          onAnalyze={(s) => { setWordPop(null); setSentenceToAnalyze(s); }} />
+          )}
+
+          {/* Kelime listesi PDF içe aktarma */}
+          {isWordListOpen && (
+            <WordListImportModal
+              cards={cards}
+              onClose={() => setIsWordListOpen(false)}
+              onImport={(newCards, fills, perDay) => {
+                const upd = new Map(fills.map(c => [c.id, c]));
+                setCards(prev => [...prev.map(c => upd.get(c.id) || c), ...newCards]);
+                setSettings(s => ({ ...s, dailyListNew: perDay, listReleaseDay: getTodayStr() }));
+                setIsWordListOpen(false);
+                const active = newCards.filter(c => !c.queued).length;
+                showToast(newCards.length + ' kelime eklendi: ' + active + ' tanesi bugünkü tekrarda, ' + (newCards.length - active) + ' tanesi sırada (her gün ' + perDay + ' yeni kelime)' + (fills.length ? '; ' + fills.length + ' mevcut kartın eksikleri tamamlandı' : '') + '.');
+              }}
+            />
           )}
 
           {/* Sesli çalışma */}
@@ -2721,11 +2840,11 @@
         Object.entries(at.answers || {}).forEach(([num, my]) => {
           const q = ex.questions.find(x => x.num === +num);
           if (!q || q.answer < 0) return;
-          const s = examSectionOf(q.num).label;
+          const s = qSection(q);
           sec[s] = sec[s] || [0, 0]; sec[s][1]++; if (q.answer === my) sec[s][0]++;
         });
       }));
-      const secs = EXAM_SECTIONS.map(s => s.label).filter(l => sec[l]);
+      const secs = QTYPES.filter(l => sec[l]);
       const Bar = ({ label, c, n }) => {
         const pct = Math.round(c / n * 100);
         return (
@@ -3583,9 +3702,9 @@
 
     // --- YÜKLENEN ÇIKMIŞ SINAVI ÇÖZME (gerçek sınav düzeni) ---
     // Serbest gezinme, işaretleme, süre; cevap anahtarı olmayan sorular puanlanmaz; sonda bölüm bölüm analiz ve tahmini puan.
-    function RealExamRunner({ exam, sectionIdx, readings, cards, exams, onExit, onFinish, onSetAnswer, onPractice }) {
-      const qsList = useMemo(() => (exam.questions || []).filter(q => sectionIdx == null || (q.num >= EXAM_SECTIONS[sectionIdx].from && q.num <= EXAM_SECTIONS[sectionIdx].to)), [exam, sectionIdx]);
-      const totalSec = sectionIdx == null ? 180 * 60 : Math.max(5 * 60, Math.ceil(qsList.length * 2.25) * 60);
+    function RealExamRunner({ exam, section, readings, cards, exams, onExit, onFinish, onSetAnswer, onPractice }) {
+      const qsList = useMemo(() => (exam.questions || []).filter(q => section == null || qSection(q) === section).sort((a, b) => a.num - b.num), [exam, section]);
+      const totalSec = section == null ? 180 * 60 : Math.max(5 * 60, Math.ceil(qsList.length * 2.25) * 60);
       const [idx, setIdx] = useState(0);
       const [picked, setPicked] = useState({});           // num → şık
       const [flags, setFlags] = useState({});
@@ -3601,9 +3720,9 @@
         const rows = qsList.map(q => {
           const my = picked[q.num];
           const graded = q.answer >= 0;
-          return { num: q.num, my: my === undefined ? -1 : my, graded, ok: graded && my === q.answer, empty: my === undefined };
+          return { num: q.num, section: qSection(q), my: my === undefined ? -1 : my, graded, ok: graded && my === q.answer, empty: my === undefined };
         });
-        const attempt = { at: new Date().toISOString(), section: sectionIdx == null ? 'all' : EXAM_SECTIONS[sectionIdx].label, durationSec: Math.round((Date.now() - startAt) / 1000), answers: Object.fromEntries(rows.filter(r => !r.empty).map(r => [r.num, r.my])) };
+        const attempt = { at: new Date().toISOString(), section: section == null ? 'all' : section, durationSec: Math.round((Date.now() - startAt) / 1000), answers: Object.fromEntries(rows.filter(r => !r.empty).map(r => [r.num, r.my])) };
         setResult(rows);
         onFinish && onFinish(attempt, rows);
       };
@@ -3625,12 +3744,12 @@
 
       if (result) {
         const live = result.map(r => { const lq = qsList.find(x => x.num === r.num); const graded = !!lq && lq.answer >= 0; return { ...r, graded, ok: graded && r.my === lq.answer }; });
-        const bySection = EXAM_SECTIONS.map(s => {
+        const bySection = examSections({ questions: qsList }).map(s => {
           const r = live.filter(x => x.num >= s.from && x.num <= s.to);
           return { ...s, n: r.length, ok: r.filter(x => x.ok).length, wrong: r.filter(x => x.graded && !x.ok && !x.empty).length, empty: r.filter(x => x.empty).length, ungraded: r.filter(x => !x.graded).length };
         }).filter(s => s.n);
         const graded = live.filter(x => x.graded).length, ok = live.filter(x => x.ok).length;
-        const fullExam = sectionIdx == null && qsList.length >= 70;
+        const fullExam = section == null && qsList.length >= 70;
         const used = Math.round((Date.now() - startAt) / 1000);
         const shown = qsList.filter(q => {
           const r = live.find(x => x.num === q.num);
@@ -3642,7 +3761,7 @@
           <div className="max-w-3xl mx-auto space-y-4">
             <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 space-y-3">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="font-black text-lg text-white">{exam.title}{sectionIdx != null ? ' · ' + EXAM_SECTIONS[sectionIdx].label : ''}</h3>
+                <h3 className="font-black text-lg text-white">{exam.title}{section != null ? ' · ' + section : ''}</h3>
                 <span className="text-xs text-slate-400">Süre: {Math.floor(used / 60)} dk {used % 60} sn</span>
               </div>
               {graded > 0 ? (
@@ -3693,7 +3812,7 @@
                 <div key={q.num} className={"p-4 rounded-2xl bg-slate-950 border space-y-2 " + (r.ok ? 'border-emerald-900/60' : r.graded ? 'border-red-900/60' : 'border-slate-800')}>
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="font-bold text-white">Soru {q.num}</span>
-                    <span className="text-indigo-400">{examSectionOf(q.num).label}</span>
+                    <span className="text-indigo-400">{qSection(q)}</span>
                   </div>
                   {q.passage && <details className="text-[11px] text-slate-400"><summary className="cursor-pointer text-amber-300/80">📖 Parçayı göster</summary><p className="font-serif whitespace-pre-wrap mt-1">{q.passage}</p></details>}
                   {q.prompt && <p className="text-sm text-slate-100 font-serif">{q.prompt}</p>}
@@ -3713,7 +3832,7 @@
                   </div>
                   {tool === 'meanings' && <OptionMeanings options={q.options} />}
                   {tool === 'similar' && (
-                    <SimilarPanel q={{ ...q, type: examSectionOf(q.num).label, section: examSectionOf(q.num).label }} meta={{ field: exam.field }}
+                    <SimilarPanel q={{ ...q, type: qSection(q), section: qSection(q) }} meta={{ field: exam.field }}
                       readings={readings} cards={cards} exams={exams} onPractice={onPractice}
                       onSetAnswer={(i) => onSetAnswer(q.num, i)} />
                   )}
@@ -3731,7 +3850,7 @@
         <div className="max-w-3xl mx-auto space-y-3">
           <div className="flex items-center justify-between text-xs text-slate-400">
             <button onClick={() => { if (window.confirm('Sınavdan çıkılsın mı? Cevaplarınız kaydedilmez.')) onExit(); }} className="hover:text-slate-200">✕ Çık</button>
-            <span className="truncate px-2">{exam.title} · <span className="text-blue-300 font-bold">{examSectionOf(q.num).label}</span></span>
+            <span className="truncate px-2">{exam.title} · <span className="text-blue-300 font-bold">{qSection(q)}</span></span>
             <span className={"font-black text-sm " + (remaining <= 300 ? 'text-red-400' : 'text-indigo-300')}>⏱ {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}</span>
           </div>
           {/* Soru haritası */}
@@ -3807,9 +3926,9 @@
         if (customExams.length > examCountRef.current) setExamTab('uploaded');
         examCountRef.current = customExams.length;
       }, [customExams.length]);
-      const [runner, setRunner] = useState(null);          // { examId, sectionIdx }
+      const [runner, setRunner] = useState(null);          // { examId, section }
       const [keyEdit, setKeyEdit] = useState(null);        // { examId, text }
-      const startCustomExam = (ex, sectionIdx = null) => setRunner({ examId: ex.id, sectionIdx });
+      const startCustomExam = (ex, section = null) => setRunner({ examId: ex.id, section });
       const practiceList = (items) => {
         setRunner(null);
         setQs(items); setIdx(0); setPicked({}); setMarked(false); reported.current = false; setTimed(null);
@@ -3850,8 +3969,8 @@
       if (runnerExam) {
         return (
           <RealExamRunner
-            key={runner.examId + '|' + runner.sectionIdx}
-            exam={runnerExam} sectionIdx={runner.sectionIdx}
+            key={runner.examId + '|' + runner.section}
+            exam={runnerExam} section={runner.section}
             readings={readings} cards={cards} exams={customExams}
             onExit={() => setRunner(null)}
             onFinish={(attempt, rows) => onExamFinished && onExamFinished(runnerExam, attempt, rows)}
@@ -3924,7 +4043,7 @@
                 <div className="space-y-3">
                   {customExams.map(ex => {
                     const qCount = ex.questions.length;
-                    const vocabCount = ex.questions.filter(q => q.num <= 6 || q.category.includes('Kelime')).length;
+                    const vocabCount = ex.questions.filter(q => qSection(q) === 'Kelime & Dil Bilgisi').length;
                     return (
                       <div key={ex.id} className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 hover:border-slate-700 transition">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3989,10 +4108,10 @@
                           >
                             ▶ Tüm Sınavı Çöz ({qCount} Soru · 180 dk)
                           </button>
-                          {EXAM_SECTIONS.map((s, si) => {
-                            const n = ex.questions.filter(q => q.num >= s.from && q.num <= s.to).length;
+                          {examSections(ex).map(s => {
+                            const n = s.n;
                             return n ? (
-                              <button key={s.label} type="button" onClick={() => startCustomExam(ex, si)}
+                              <button key={s.label} type="button" onClick={() => startCustomExam(ex, s.label)}
                                 className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 hover:bg-slate-800 text-xs font-bold text-slate-200">
                                 {s.from}-{s.to} {s.label} <span className="text-slate-500">({n})</span>
                               </button>
@@ -4544,8 +4663,258 @@
       );
     }
 
+    // --- KELİME LİSTESİ PDF'İ İÇE AKTARMA ---
+    // Tablo biçimli kelime listelerini okur: "No | English | Türkçe", "No | Kelime | Anlamı | Ek Bilgiler",
+    // "S.No | EN · Okunuş | TR", yan yana iki tablo olan sayfalar. Her satır numarasıyla bulunur, ilk satır
+    // boşluklara göre hücrelere bölünür, alt satırlara taşan metin üstündeki hücreye eklenir.
+    const WL_NUM_HDR = /^(s\.?\s*no|no|sıra)$/i;
+    const WL_EN_HDR = /^(english|ingilizce|kelime|word|en\b)/i;
+    const WL_TR_HDR = /^(türkçe|anlamı|anlam|tr|meaning)$/i;
+    async function extractWordListPdf(buffer, onStatus) {
+      if (!window.pdfjsLib) throw new Error('PDF okuyucu yüklenemedi (internet bağlantısını kontrol edin).');
+      const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
+      const entries = [];
+      let numCols = null;                // önceki sayfanın numara sütunları (başlıksız sayfalar için)
+      for (let p = 1; p <= pdf.numPages; p++) {
+        if (onStatus && (p === 1 || p % 5 === 0)) onStatus('Sayfa ' + p + '/' + pdf.numPages + ' okunuyor…');
+        const page = await pdf.getPage(p);
+        const vp = page.getViewport({ scale: 1 });
+        const tc = await page.getTextContent();
+        const items = tc.items.filter(it => it.str && it.str.trim()).map(it => ({ s: it.str, f: it.fontName, x: it.transform[4], y: vp.height - it.transform[5], w: it.width || 0, h: Math.abs(it.transform[3]) || 9 }));
+        // Başlık satırları (ör. "S.No  English  Türkçe")
+        const hdrs = items.filter(it => WL_NUM_HDR.test(it.s.trim()) && items.some(o => Math.abs(o.y - it.y) < 3 && o.x > it.x && (WL_EN_HDR.test(o.s.trim()) || WL_TR_HDR.test(o.s.trim()))));
+        if (hdrs.length) numCols = hdrs.map(h => h.x).sort((a, b) => a - b);
+        if (!numCols) continue;
+        const hdrYs = hdrs.map(h => h.y);
+        // Satır numaraları: numara sütununun hizasındaki salt sayılar
+        const nums = items.filter(it => /^\d{1,5}$/.test(it.s.trim()) && numCols.some(x => Math.abs(it.x - x) < 22) && it.y < vp.height - 50);
+        nums.sort((a, b) => a.y - b.y || a.x - b.x);
+        const tableOf = (x) => { let k = 0; numCols.forEach((c, i) => { if (x >= c - 15) k = i; }); return k; };
+        for (const n of nums) {
+          const t = tableOf(n.x);
+          const x0 = numCols[t] - 15, x1 = t + 1 < numCols.length ? numCols[t + 1] - 15 : vp.width;
+          const below = nums.filter(o => tableOf(o.x) === t && o.y > n.y + 2).map(o => o.y);
+          const stops = [...below, ...hdrYs.filter(y => y > n.y + 2), vp.height - 50, n.y + 140];
+          const yEnd = Math.min(...stops) - 3;
+          const mine = items.filter(it => it !== n && it.x >= x0 && it.x < x1 && it.y >= n.y - 3 && it.y < yEnd);
+          if (!mine.length) continue;
+          // İlk satırdaki parçalar → hücreler (geniş boşlukta yeni hücre)
+          const first = mine.filter(it => Math.abs(it.y - n.y) < 3).sort((a, b) => a.x - b.x);
+          const cells = [];
+          first.forEach(it => {
+            const c = cells[cells.length - 1];
+            if (c && it.x - c.end < 10) { c.items.push(it); c.end = Math.max(c.end, it.x + it.w); }
+            else cells.push({ start: it.x, end: it.x + it.w, items: [it] });
+          });
+          if (!cells.length) continue;
+          // Alt satırlar: başlangıcı en yakın (solundaki) hücreye
+          mine.filter(it => Math.abs(it.y - n.y) >= 3).forEach(it => {
+            let best = null;
+            cells.forEach(c => { if (it.x >= c.start - 25 && (!best || c.start > best.start)) best = c; });
+            (best || cells[0]).items.push(it);
+          });
+          const text = (arr) => {
+            const lines = [];
+            [...arr].sort((a, b) => a.y - b.y || a.x - b.x).forEach(it => {
+              const l = lines[lines.length - 1];
+              if (l && Math.abs(it.y - l.y) < 3) l.items.push(it); else lines.push({ y: it.y, items: [it] });
+            });
+            return lines.map(l => {
+              let s = '', end = null;
+              l.items.sort((a, b) => a.x - b.x).forEach(it => { if (end !== null && it.x - end > 1.2 && !/\s$/.test(s)) s += ' '; s += it.s; end = it.x + it.w; });
+              return s.trim();
+            }).filter(Boolean);
+          };
+          const enCell = cells[0], trCell = cells[1], exCell = cells[2];
+          // İngilizce hücresi: ilk yazı tipi = kelime, farklı (italik) yazı tipindeki kısım = okunuş
+          const enItems = [...enCell.items].sort((a, b) => a.y - b.y || a.x - b.x);
+          const f0 = enItems[0].f;
+          const en = text(enItems.filter(it => it.f === f0)).join(' ').replace(/\s+/g, ' ').trim();
+          const okunus = text(enItems.filter(it => it.f !== f0)).join(' ').trim();
+          if (!en || /^\d+$/.test(en)) continue;
+          entries.push({
+            no: +n.s.trim(), page: p,
+            en, okunus,
+            trLines: trCell ? text(trCell.items) : [],
+            extraLines: exCell ? text(exCell.items) : [],
+          });
+        }
+      }
+      return { entries, pages: pdf.numPages };
+    }
+
+    // Satırı karta dönüştürülecek biçime çevir
+    const WL_POS = { 'f.': 'verb', 'i.': 'noun', 's.': 'adjective', 'zf.': 'adverb', 'edat': 'preposition', 'bağ.': 'conjunction', 'ünl.': 'interjection', 'zm.': 'pronoun' };
+    const WL_PREPS = new Set(['to', 'of', 'in', 'on', 'with', 'for', 'from', 'at', 'by', 'as', 'about', 'against', 'into', 'upon', 'over', 'between', 'among', 'towards', 'toward', 'through', 'off', 'out', 'up']);
+    function normalizeWordEntry(e) {
+      const english = e.en.replace(/\s*,\s*/g, ', ').trim();
+      // "abort by", "acclaim as, by" → kök "abort", "acclaim"; edatlar kartta kalır
+      const toks = english.toLowerCase().split(/[\s,]+/).filter(Boolean);
+      const lemma = toks.length > 1 && toks.slice(1).every(t => WL_PREPS.has(t)) ? toks[0] : english.toLowerCase();
+      // Türkçe anlam: satırları birleştir, ";" ile ayrılmış ilk 4 anlam; sözlükteki "f. / i. / s." türü kelime türü olur
+      const trAll = e.trLines.join(' ').replace(/\s+/g, ' ').trim();
+      // Anlamlar ";" ile ya da yeni bir tür kısaltmasıyla ("f. …", "i. …") başlayan satırla ayrılır
+      const senses = e.trLines.join('\n').split(/\s*;\s*|\n(?=(?:zf|f|i|s|edat|bağ|ünl|zm)\.\s)/).map(s => s.replace(/\s*\n\s*/g, ' ').trim()).filter(Boolean);
+      let pos = '';
+      const m = (senses[0] || '').match(/^(zf\.|f\.|i\.|s\.|edat|bağ\.|ünl\.|zm\.)\s*/);
+      if (m) pos = WL_POS[m[1]] || '';
+      const turkish = senses.slice(0, 4).map(s => s.replace(/^(?:[a-zçğıöşü]{1,5}\.\s*,?)+\s*/i, '').replace(/\.$/, '')).filter(Boolean).join('; ');
+      const extra = e.extraLines.join(' ');
+      const ipaM = extra.match(/Okunuşu:\s*\/\s*([^/]+?)\s*\//);
+      const ipa = ipaM ? ipaM[1].replace(/\s+/g, '').replace(/ʼ/g, 'ˈ') : '';
+      const hece = (extra.match(/Hecelenişi:\s*([^\s]+)/) || [])[1] || '';
+      return { english, lemma, turkish, trFull: trAll, pos, ipa, okunus: e.okunus || (ipa ? ipaToTurkish(ipa) : ''), hyphenation: hece, no: e.no };
+    }
+
+    // Kelime listesi PDF'lerini içe aktarma penceresi
+    function WordListImportModal({ cards, onClose, onImport }) {
+      const [files, setFiles] = useState([]);          // [{ name, listName, entries, error }]
+      const [busy, setBusy] = useState('');
+      const [startNow, setStartNow] = useState(20);
+      const [perDay, setPerDay] = useState(10);
+      const [shuffle, setShuffle] = useState(false);
+      const prettyName = (n) => n.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').replace(/\bzafer hoca\b/i, 'Zafer Hoca').replace(/\b\p{L}/gu, ch => ch.toLocaleUpperCase('tr'));
+
+      const pick = async (e) => {
+        const list = [...(e.target.files || [])];
+        e.target.value = '';
+        for (const file of list) {
+          setBusy('"' + file.name + '" okunuyor…');
+          try {
+            const { entries } = await extractWordListPdf(await file.arrayBuffer(), (s) => setBusy('"' + file.name + '": ' + s));
+            const norm = entries.map(normalizeWordEntry).filter(x => x.english && x.turkish);
+            setFiles(prev => [...prev, { name: file.name, listName: prettyName(file.name), entries: norm, error: norm.length ? '' : 'Bu dosyada "No | Kelime | Anlam" biçiminde bir tablo bulunamadı.' }]);
+          } catch (err) {
+            setFiles(prev => [...prev, { name: file.name, listName: prettyName(file.name), entries: [], error: err.message || 'Okunamadı.' }]);
+          }
+        }
+        setBusy('');
+      };
+
+      // Bankadakilerle ve listeler arasında tekrarları ayıkla
+      const existing = new Map(cards.map(c => [String(c.lemma || c.english).toLowerCase(), c]));
+      const existingEn = new Set(cards.map(c => String(c.english).toLowerCase()));
+      // Aynı kök ("abort by" ve "abort") tek kart olur; sonraki listedeki IPA / okunuş / tür bilgisi ilkine eklenir
+      const seen = new Map();
+      const plan = [];
+      let dupBank = 0, dupList = 0;
+      files.forEach(f => f.entries.forEach(x => {
+        const k = x.english.toLowerCase();
+        if (existingEn.has(k) || existing.has(k) || existing.has(x.lemma)) { dupBank++; return; }
+        const prev = seen.get(k) || seen.get(x.lemma);
+        if (prev) {
+          dupList++;
+          if (!prev.ipa && x.ipa) prev.ipa = x.ipa;
+          if (!prev.okunus && x.okunus) prev.okunus = x.okunus;
+          if (!prev.pos && x.pos) prev.pos = x.pos;
+          if (prev.listName !== f.listName && !(prev.alsoIn || []).includes(f.listName)) prev.alsoIn = [...(prev.alsoIn || []), f.listName];
+          return;
+        }
+        const item = { ...x, listName: f.listName };
+        seen.set(k, item); seen.set(x.lemma, item);
+        plan.push(item);
+      }));
+
+      const doImport = () => {
+        const now = new Date().toISOString(), today = getTodayStr();
+        const order = shuffle ? shuffleArr(plan) : plan;
+        const stamp = Date.now();
+        const newCards = order.map((x, i) => {
+          const id = 'card_wl_' + stamp + '_' + i;
+          const active = i < startNow;
+          return {
+            id, english: x.english, lemma: x.lemma, turkish: x.turkish,
+            ...(x.trFull && x.trFull !== x.turkish && x.trFull.length < 400 ? { trFull: x.trFull } : {}),
+            partOfSpeech: x.pos || '', ipa: x.ipa || '', okunus: x.okunus || '',
+            ...(x.hyphenation ? { hyphenation: x.hyphenation } : {}),
+            sourceType: 'word_list', listName: x.listName, listNo: x.no, ...(x.alsoIn ? { alsoIn: x.alsoIn } : {}),
+            queued: !active, queueOrder: i,
+            isDifficult: false,
+            srs: { ...createSRS(id), nextReviewAt: active ? today : '9999-12-31' },
+            createdAt: now, updatedAt: now,
+          };
+        });
+        // Bankadaki aynı kelimenin eksik alanlarını listeden tamamla (ör. okunuş, IPA)
+        const fills = [];
+        files.forEach(f => f.entries.forEach(x => {
+          const c = existing.get(x.english.toLowerCase()) || existing.get(x.lemma);
+          if (!c) return;
+          const patch = {};
+          if (isMissingMeaning(c) && x.turkish) patch.turkish = x.turkish;
+          if (!c.ipa && x.ipa) patch.ipa = x.ipa;
+          if (!c.okunus && x.okunus) patch.okunus = x.okunus;
+          if (!c.partOfSpeech && x.pos) patch.partOfSpeech = x.pos;
+          if (Object.keys(patch).length && !fills.some(y => y.id === c.id)) fills.push({ ...c, ...patch, updatedAt: now });
+        }));
+        onImport(newCards, fills, perDay);
+      };
+
+      const total = files.reduce((a, f) => a + f.entries.length, 0);
+      return (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl w-full space-y-4 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <h3 className="font-bold text-base text-white">📥 Kelime Listesi İçe Aktar (PDF)</h3>
+                <p className="text-xs text-slate-400 mt-0.5">"No · Kelime · Anlam" tablolu listeler: 5000 kelime defteri, özel sözlük modülü, 1000 temel kelime gibi.</p>
+              </div>
+              <button type="button" onClick={onClose} className="text-slate-400 hover:text-white text-sm">✕</button>
+            </div>
+
+            <label className={"block p-4 rounded-xl border border-dashed border-slate-700 bg-slate-950/60 text-center cursor-pointer " + (busy ? 'opacity-60 pointer-events-none' : '')}>
+              <input type="file" accept=".pdf" multiple onChange={pick} className="hidden" />
+              <span className="inline-block px-4 py-2 rounded-xl bg-blue-600 text-xs font-bold text-white">📁 PDF seç (birden fazla seçilebilir)</span>
+              <p className="text-[11px] text-slate-500 mt-2">Dosyalar yalnızca bu cihazda okunur; kelimeler kendi kelime bankanıza (ve giriş yaptıysanız kendi bulut alanınıza) eklenir.</p>
+            </label>
+            {busy && <p className="text-xs text-blue-300">{busy}</p>}
+
+            {files.length > 0 && (
+              <div className="space-y-2">
+                {files.map((f, i) => (
+                  <div key={i} className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <input value={f.listName} onChange={e => setFiles(prev => prev.map((x, j) => j === i ? { ...x, listName: e.target.value } : x))} aria-label="Liste adı" className="flex-1 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white" />
+                      <span className={"text-xs font-bold " + (f.error ? 'text-red-400' : 'text-emerald-400')}>{f.error ? '✕' : f.entries.length + ' kelime'}</span>
+                      <button onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))} aria-label="Listeyi kaldır" className="text-slate-500 hover:text-red-400 text-xs">🗑</button>
+                    </div>
+                    {f.error && <p className="text-[11px] text-red-300">{f.error}</p>}
+                    {!f.error && (
+                      <div className="grid gap-0.5 text-[11px]">
+                        {f.entries.slice(0, 4).map((x, k) => (
+                          <p key={k} className="text-slate-400 truncate"><b className="text-white">{x.english}</b>{x.okunus ? <span className="text-amber-300"> [{x.okunus}]</span> : null}{x.pos ? <span className="text-slate-500"> ({x.pos})</span> : null} → <span className="text-blue-300">{x.turkish}</span></p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-xs text-slate-300">
+                  <p><b className="text-white">{plan.length}</b> yeni kelime eklenecek{dupBank ? <span className="text-slate-500"> · {dupBank} tanesi zaten bankanızda (eksik okunuş/anlam varsa tamamlanır)</span> : null}{dupList ? <span className="text-slate-500"> · {dupList} tanesi listelerde tekrar ediyor</span> : null}</p>
+                  <label className="flex items-center gap-2">Hemen tekrara başlansın:
+                    <input type="number" min="0" max={plan.length} value={startNow} onChange={e => setStartNow(clampN(+e.target.value || 0, 0, plan.length))} className="w-20 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-white" /> kelime
+                  </label>
+                  <label className="flex items-center gap-2">Kalanlar sırada beklesin; her gün
+                    <input type="number" min="0" max="200" value={perDay} onChange={e => setPerDay(clampN(+e.target.value || 0, 0, 200))} className="w-20 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-white" /> yeni kelime tekrara eklensin
+                  </label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={shuffle} onChange={e => setShuffle(e.target.checked)} className="accent-blue-500" /> Liste sırası yerine karışık sırayla</label>
+                  <p className="text-[11px] text-slate-500">Sıradaki kelimeleri Kelime Kartları → "📚 Sırada bekleyen" filtresinden görebilir; bildiklerinizi "✓ Biliyorum" ile atlayabilir, istediklerinizi "▶ Öğrenmeye başla" ile hemen ekleyebilirsiniz.{plan.length > 2000 ? ' Google ile girişliyseniz bu kadar kelimenin buluta eşitlenmesi birkaç dakika sürebilir.' : ''}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 text-xs text-slate-300">İptal</button>
+              <button type="button" disabled={!plan.length || !!busy} onClick={doImport} className="px-5 py-2 rounded-lg bg-blue-600 font-bold text-xs text-white hover:bg-blue-500 disabled:opacity-50">
+                {plan.length ? plan.length + ' kelimeyi ekle' : total ? 'Eklenecek yeni kelime yok' : 'PDF bekleniyor'}
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     // Kelime Kartları bölümü: çevrilebilir kartlar, Tureng bağlantısı ve kart üzerinde anlam düzenleme
-    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete, onAudio }) {
+    function FlashcardsSection({ cards, readings, recentIds, onUpdate, onUpdateMany, onDelete, onAudio, onImportList }) {
       const [query, setQuery] = useState('');
       const [autoFill, setAutoFill] = useState(null);     // { done, total } otomatik anlam bulma sürerken
       const [refreshingId, setRefreshingId] = useState(null);
@@ -4586,9 +4955,16 @@
 
       const recentSet = new Set(recentIds || []);
       const readingTitles = [...new Set(cards.map(c => c.readingTitle).filter(Boolean))];
+      const listNames = [...new Set(cards.map(c => c.listName).filter(Boolean))];
+      const queuedCount = cards.filter(c => c.queued).length;
+      // Binlerce kart olabilir: 60'ar 60'ar göster
+      const [shown, setShown] = useState(60);
+      useEffect(() => { setShown(60); }, [filter, qTypeFilter, query]);
       const q = query.trim().toLowerCase();
       let list = cards.filter(c => {
         if (filter === 'recent' && !recentSet.has(c.id)) return false;
+        if (filter === 'queued' && !c.queued) return false;
+        if (filter.startsWith('l:') && c.listName !== filter.slice(2)) return false;
         if (filter === 'missing' && !isMissingMeaning(c)) return false;
         if (filter.startsWith('r:') && c.readingTitle !== filter.slice(2)) return false;
         if (qTypeFilter !== 'all' && !cardMatchesQType(c, qTypeFilter)) return false;
@@ -4632,14 +5008,17 @@
               <option value="all">Tüm kartlar</option>
               {recentIds && recentIds.length > 0 && <option value="recent">Son eklenenler ({recentIds.length})</option>}
               <option value="missing">Anlamı eksik olanlar ({missingCount})</option>
+              {queuedCount > 0 && <option value="queued">📚 Sırada bekleyen liste kelimeleri ({queuedCount})</option>}
+              {listNames.map(n => <option key={n} value={'l:' + n}>Liste: {n}</option>)}
               {readingTitles.map(t => <option key={t} value={'r:' + t}>Metin: {t}</option>)}
             </select>
             <select value={qTypeFilter} onChange={e => setQTypeFilter(e.target.value)} aria-label="Soru tipine göre filtrele" className="px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-indigo-300">
               <option value="all">Tüm Soru Tipleri</option>
               <option value="exam">🎯 Çıkmış sınav kelimeleri ({cards.filter(c => c.examInfo && c.examInfo.verified).length})</option>
-              {EXAM_SECTIONS.map((s, i) => <option key={i} value={String(i)}>{s.label} ({s.from}-{s.to}) · {cards.filter(c => cardMatchesQType(c, String(i))).length}</option>)}
+              {QTYPE_FILTERS.map(t => <option key={t} value={t}>{t} · {cards.filter(c => cardMatchesQType(c, t)).length}</option>)}
               <option value="genel">Genel Akademik</option>
             </select>
+            {onImportList && <button onClick={onImportList} className="px-3 py-1.5 rounded-lg bg-emerald-700 text-xs font-bold text-white">📥 Liste içe aktar (PDF)</button>}
             {onAudio && <button onClick={onAudio} disabled={!cards.length} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-xs font-bold text-white disabled:opacity-40">🎧 Dinleyerek çalış</button>}
             <button onClick={shuffle} className="px-3 py-1.5 rounded-lg bg-slate-800 text-xs font-bold text-slate-200">🔀 Karıştır</button>
             <button
@@ -4681,7 +5060,7 @@
             <div className="text-center py-10 text-xs text-slate-400">Bu filtreye uyan kart yok.</div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {list.map(c => {
+              {list.slice(0, shown).map(c => {
                 const back = flipped.has(c.id);
                 const missing = isMissingMeaning(c);
                 return (
@@ -4775,12 +5154,23 @@
                         >
                           🗑 Sil
                         </button>
+                        {c.queued && onUpdate && (
+                          <div className="w-full flex gap-1.5 pt-1">
+                            <button onClick={() => onUpdate({ ...c, queued: false, srs: { ...c.srs, nextReviewAt: getTodayStr() }, updatedAt: new Date().toISOString() })} className="flex-1 px-2 py-1 rounded-md bg-blue-700 text-[11px] font-bold text-white">▶ Öğrenmeye başla</button>
+                            <button onClick={() => onUpdate({ ...c, queued: false, srs: { ...c.srs, state: 'review', interval: 60, repetitions: 1, lastReviewedAt: getTodayStr(), nextReviewAt: addDays(getTodayStr(), 60) }, knownAtImport: true, updatedAt: new Date().toISOString() })} title="Biliyorum: 60 gün sonra bir kez sorulur" className="flex-1 px-2 py-1 rounded-md bg-emerald-800 text-[11px] font-bold text-white">✓ Biliyorum</button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 );
               })}
             </div>
+          )}
+          {list.length > shown && (
+            <button onClick={() => setShown(shown + 60)} className="w-full py-2.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 hover:bg-slate-800">
+              Daha fazla göster ({shown} / {list.length})
+            </button>
           )}
         </div>
       );
@@ -6215,7 +6605,7 @@
                 <div className="flex flex-wrap gap-1.5 pt-1">
                   {Object.entries(categoriesCount).map(([cat, cnt]) => (
                     <span key={cat} className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                      {cat.split(' ')[0]}: <b>{cnt}</b>
+                      {cat}: <b>{cnt}</b>
                     </span>
                   ))}
                   <span className="text-[10px] px-2 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800">
