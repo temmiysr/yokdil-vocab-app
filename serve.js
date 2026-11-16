@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const PORT = process.env.PORT || 3000;
-const PUBLIC_DIR = __dirname;
+const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
+const DIST_DIR = path.join(__dirname, 'dist');
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=UTF-8',
@@ -30,20 +30,13 @@ const MIME_TYPES = {
 
 const server = http.createServer((req, res) => {
   let reqPath = decodeURI(req.url.split('?')[0]);
-  // Kök adres doğrudan derlenmiş uygulamayı (dist/index.html) açar
-  if (reqPath === '/' || reqPath === '/index.html') reqPath = '/dist/index.html';
+  if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
 
-  let filePath = path.join(PUBLIC_DIR, reqPath);
+  let filePath = path.join(DIST_DIR, reqPath);
 
-  // Dosya mevcut değilse ve kök veya dist dosyasıysa kontrol et
-  if (!fs.existsSync(filePath)) {
-    const distPath = path.join(PUBLIC_DIR, 'dist', reqPath);
-    if (fs.existsSync(distPath)) {
-      filePath = distPath;
-    } else {
-      // SPA Fallback: dist/index.html
-      filePath = path.join(PUBLIC_DIR, 'dist', 'index.html');
-    }
+  // Dosya dist içinde yoksa SPA yönlendirmesi olarak dist/index.html sunulur
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+    filePath = path.join(DIST_DIR, 'index.html');
   }
 
   const ext = path.extname(filePath).toLowerCase();
@@ -51,13 +44,8 @@ const server = http.createServer((req, res) => {
 
   fs.readFile(filePath, (err, content) => {
     if (err) {
-      if (err.code === 'ENOENT') {
-        res.writeHead(404, { 'Content-Type': 'text/plain; charset=UTF-8' });
-        res.end('404: Dosya bulunamadı.');
-      } else {
-        res.writeHead(500, { 'Content-Type': 'text/plain; charset=UTF-8' });
-        res.end(`500: Sunucu Hatası: ${err.code}`);
-      }
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=UTF-8' });
+      res.end(`500: Sunucu Hatası: ${err.code}`);
     } else {
       res.writeHead(200, {
         'Content-Type': contentType,
@@ -69,9 +57,21 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`\n======================================================`);
-  console.log(`  YÖKDİL Master Web Sunucusu Başlatıldı!`);
-  console.log(`  Yerel Adres: http://localhost:${PORT}`);
-  console.log(`======================================================\n`);
-});
+// Otomatik Port Çakışması Yönetimi (Port 3000 doluysa 3001, 3002... dener)
+function startServer(port) {
+  server.listen(port, () => {
+    console.log(`\n======================================================`);
+    console.log(`  YÖKDİL Master Web Sunucusu Başlatıldı!`);
+    console.log(`  Yerel Adres: http://localhost:${port}`);
+    console.log(`======================================================\n`);
+  }).on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[Bilgi] Port ${port} kullanımda, ${port + 1} portu deneniyor...`);
+      startServer(port + 1);
+    } else {
+      console.error('Sunucu başlatma hatası:', err);
+    }
+  });
+}
+
+startServer(DEFAULT_PORT);
