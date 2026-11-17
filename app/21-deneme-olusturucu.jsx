@@ -176,6 +176,99 @@
       });
       return { bp: out, changed: out.some(s => s.w && s.w !== 1) };
     }
+    // --- HAZIR SORU BANKASI ---
+    // dist/data/question-bank.json: YDS / YÖKDİL tarzında, bu uygulama için yazılmış özgün sorular (ÖSYM sorusu değildir).
+    // Denemeler anında ve ücretsiz oluşur; aynı soru, o bölümün bankası bitene kadar tekrar gelmez.
+    let questionBankPromise = null;
+    const loadQuestionBank = () => {
+      if (!questionBankPromise) questionBankPromise = fetch('./data/question-bank.json', { cache: 'no-cache' })
+        .then(r => { if (!r.ok) throw new Error('Soru bankası yüklenemedi (' + r.status + ')'); return r.json(); })
+        .catch(e => { questionBankPromise = null; throw e; });
+      return questionBankPromise;
+    };
+    const BANK_USED_KEY = 'yokdil_bank_used_v1';
+    const getBankUsed = () => { try { return new Set(JSON.parse(localStorage.getItem(BANK_USED_KEY) || '[]')); } catch (e) { return new Set(); } };
+    const saveBankUsed = (set) => { try { localStorage.setItem(BANK_USED_KEY, JSON.stringify([...set])); } catch (e) {} };
+    // Bankadan bir bölüm: önce seçilen alandaki kullanılmamış sorular, sonra diğer alanlar; hepsi kullanıldıysa baştan
+    function genSectionFromBank(bank, spec, field, used) {
+      const all = (bank.groups || []).filter(g => g.type === spec.type);
+      if (!all.length) return { groups: [], reset: false };
+      const need = spec.n || spec.passages;
+      const rank = (g) => (used.has(g.id) ? 2 : 0) + (field !== 'Genel' && g.field !== field && g.field !== 'Genel' ? 1 : 0);
+      let pool = shuffleArr(all).sort((a, b) => rank(a) - rank(b));
+      const reset = pool.slice(0, need).some(g => used.has(g.id));
+      const picked = pool.slice(0, need);
+      picked.forEach(g => used.add(g.id));
+      const groups = picked.map(g => {
+        if (!spec.per) return { passage: g.passage || '', questions: g.questions.slice(0, 1) };
+        // Cloze'da istenenden fazla boşluk varsa fazlası doğru cevapla doldurulur
+        let passage = g.passage || '';
+        const qs = g.questions.slice(0, spec.per);
+        if (spec.type === 'Cloze Test') g.questions.slice(spec.per).forEach((q, k) => { passage = passage.replace('(' + (spec.per + k + 1) + ') ----', q.options[q.answer]); });
+        return { passage, questions: qs };
+      });
+      return { groups, reset };
+    }
+
+    // Tek yerden deneme üretimi: 'bank' (hazır banka), 'ai' (Claude), 'offline' (kendi metin ve kartlarınız)
+    async function generateMockExam({ mode, kind, field, bp, key, cards, readings, adaptiveLabel, onProgress }) {
+      const results = new Array(bp.length);
+      let bank = null, used = null, resetTypes = [];
+      if (mode === 'bank') { bank = await loadQuestionBank(); used = getBankUsed(); }
+      const focus = shuffleArr((cards || []).filter(c => c.isDifficult || (c.srs && (c.srs.lapses || 0) > 0)).map(c => c.lemma || c.english)).slice(0, 15);
+      let next = 0;
+      const worker = async () => {
+        while (next < bp.length) {
+          const i = next++;
+          const spec = bp[i];
+          onProgress && onProgress(i, { state: 'run' });
+          try {
+            let groups;
+            if (mode === 'bank') { const r = genSectionFromBank(bank, spec, field, used); groups = r.groups; if (r.reset) resetTypes.push(spec.type); }
+            else if (mode === 'ai') groups = await genSectionAI(key, kind, field, spec, focus);
+            else groups = genSectionOffline(spec, cards, readings);
+            const n = groups.reduce((a, g) => a + g.questions.length, 0);
+            results[i] = { type: spec.type, groups };
+            onProgress && onProgress(i, { state: n ? 'ok' : 'skip', note: n ? n + ' soru' : (mode === 'offline' ? 'bu bölüm için Claude ya da daha çok metin/kart gerekir' : 'bankada bu bölüm yok') });
+          } catch (e) {
+            results[i] = { type: spec.type, groups: [] };
+            onProgress && onProgress(i, { state: 'err', note: e.message || 'hata' });
+          }
+        }
+      };
+      await Promise.all(mode === 'ai' ? [worker(), worker(), worker()] : [worker()]);
+      if (used) saveBankUsed(used);
+      const questions = assembleMockExam(results.filter(Boolean));
+      if (questions.length < 3) throw new Error('Deneme oluşturulamadı: yeterli soru yok.' + (mode === 'offline' ? ' Ücretsiz modda sorular kelime kartlarınızdan ve okuma metinlerinizden üretilir; önce birkaç metin ve kart ekleyin.' : ''));
+      const d = new Date();
+      const src = mode === 'bank' ? 'hazır banka' : mode === 'ai' ? 'Claude' : 'kendi metinlerim';
+      return {
+        exam: {
+          id: 'exam_gen_' + Date.now(),
+          title: kind + ' tarzı deneme' + (adaptiveLabel ? ' (zayıf bölüm odaklı)' : '') + ' · ' + field + ' · ' + src + ' · ' + d.toLocaleDateString('tr-TR') + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
+          field, year: d.getFullYear(), term: '', kind, generated: mode === 'ai' ? 'claude' : mode,
+          questions, uploadedAt: d.toISOString(),
+        },
+        resetTypes,
+      };
+    }
+
+    // Arka planda hazırlanan bir sonraki Claude denemesi (bu tarayıcıda saklanır)
+    const PREFETCH_KEY = 'yokdil_prefetch_exam_v1';
+    const getPrefetched = () => { try { return JSON.parse(localStorage.getItem(PREFETCH_KEY) || 'null'); } catch (e) { return null; } };
+    const setPrefetched = (v) => { try { v ? localStorage.setItem(PREFETCH_KEY, JSON.stringify(v)) : localStorage.removeItem(PREFETCH_KEY); } catch (e) {} };
+    let prefetchRunning = false;
+    async function prefetchNextExam(params) {
+      if (prefetchRunning || getPrefetched()) return;
+      prefetchRunning = true;
+      try {
+        const { exam } = await generateMockExam({ ...params, mode: 'ai' });
+        setPrefetched({ kind: params.kind, field: params.field, size: params.size, exam, at: new Date().toISOString() });
+        window.dispatchEvent(new Event('yokdil-prefetch'));
+      } catch (e) { /* sessizce vazgeç; kullanıcı yine elle oluşturabilir */ }
+      finally { prefetchRunning = false; }
+    }
+
     function MockExamBuilder({ cards, readings, exams, onCreate }) {
       const [kind, setKind] = useState('YÖKDİL');
       const [field, setField] = useState('Fen Bilimleri');
@@ -184,47 +277,47 @@
       const [keyOpen, setKeyOpen] = useState(false);
       const [progress, setProgress] = useState(null);   // [{ type, state: 'wait'|'run'|'ok'|'skip'|'err', note }]
       const [err, setErr] = useState('');
+      const [note, setNote] = useState('');
       const [adaptive, setAdaptive] = useState(false);
+      const [autoNext, setAutoNext] = useState(() => { try { return localStorage.getItem('yokdil_prefetch_on') === '1'; } catch (e) { return false; } });
+      const [prefetched, setPrefetchedState] = useState(getPrefetched);
+      const [bankInfo, setBankInfo] = useState(null);   // { total, unused }
+      useEffect(() => {
+        const h = () => setPrefetchedState(getPrefetched());
+        window.addEventListener('yokdil-prefetch', h);
+        loadQuestionBank().then(b => { const used = getBankUsed(); const qs = (b.groups || []).reduce((a, g) => a + g.questions.length, 0); const un = (b.groups || []).filter(g => !used.has(g.id)).reduce((a, g) => a + g.questions.length, 0); setBankInfo({ total: qs, unused: un }); }).catch(() => setBankInfo({ error: true }));
+        return () => window.removeEventListener('yokdil-prefetch', h);
+      }, []);
       const secAcc = useMemo(() => recentSectionAccuracy(exams || []), [exams]);
       const adapted = adaptBlueprint(EXAM_BLUEPRINTS[kind][size], secAcc);
-      const bp = adaptive && adapted.changed ? adapted.bp : EXAM_BLUEPRINTS[kind][size];
+      const useAdaptive = adaptive && adapted.changed;
+      const bp = useAdaptive ? adapted.bp : EXAM_BLUEPRINTS[kind][size];
       const total = blueprintCount(bp);
       const minutes = Math.round(180 * total / 80);
       const busy = progress && progress.some(p => p.state === 'run' || p.state === 'wait');
-      const setP = (i, patch) => setProgress(prev => prev.map((p, k) => k === i ? { ...p, ...patch } : p));
-      const run = async (useAI) => {
-        if (useAI && !key) { setKeyOpen(true); return; }
-        setErr('');
+      const run = async (mode) => {
+        if (mode === 'ai' && !key) { setKeyOpen(true); return; }
+        setErr(''); setNote('');
         setProgress(bp.map(s => ({ type: s.type, state: 'wait', note: '' })));
-        const focus = shuffleArr(cards.filter(c => c.isDifficult || (c.srs && (c.srs.lapses || 0) > 0)).map(c => c.lemma || c.english)).slice(0, 15);
-        const results = new Array(bp.length);
-        let next = 0;
-        const worker = async () => {
-          while (next < bp.length) {
-            const i = next++;
-            const spec = bp[i];
-            setP(i, { state: 'run' });
-            try {
-              const groups = useAI ? await genSectionAI(key, kind, field, spec, focus) : genSectionOffline(spec, cards, readings);
-              const n = groups.reduce((a, g) => a + g.questions.length, 0);
-              results[i] = { type: spec.type, groups };
-              setP(i, { state: n ? 'ok' : 'skip', note: n ? n + ' soru' : (useAI ? 'üretilemedi' : 'bu bölüm için Claude ya da daha çok metin/kart gerekir') });
-            } catch (e) {
-              results[i] = { type: spec.type, groups: [] };
-              setP(i, { state: 'err', note: e.message || 'hata' });
-            }
-          }
-        };
-        await Promise.all([worker(), worker(), worker()]);
-        const questions = assembleMockExam(results.filter(Boolean));
-        if (questions.length < 3) { setErr('Deneme oluşturulamadı: yeterli soru yok.' + (useAI ? '' : ' Ücretsiz modda sorular kelime kartlarınızdan ve okuma metinlerinizden üretilir; önce birkaç metin ve kart ekleyin.')); return; }
-        const d = new Date();
-        onCreate({
-          id: 'exam_gen_' + Date.now(),
-          title: kind + ' tarzı deneme' + (adaptive && adapted.changed ? ' (zayıf bölüm odaklı)' : '') + ' · ' + field + ' · ' + d.toLocaleDateString('tr-TR') + ' ' + d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }),
-          field, year: d.getFullYear(), term: '', kind, generated: useAI ? 'claude' : 'offline',
-          questions, uploadedAt: d.toISOString(),
-        });
+        try {
+          const { exam, resetTypes } = await generateMockExam({ mode, kind, field, bp, key, cards, readings, adaptiveLabel: useAdaptive,
+            onProgress: (i, patch) => setProgress(prev => prev && prev.map((p, k) => k === i ? { ...p, ...patch } : p)) });
+          if (resetTypes.length) setNote('Bankadaki şu bölümlerin hepsini daha önce görmüştünüz, sorular baştan karıştırıldı: ' + [...new Set(resetTypes)].join(', ') + '.');
+          onCreate(exam);
+          if (mode === 'ai' && autoNext) prefetchNextExam({ kind, field, size, bp, key, cards, readings, adaptiveLabel: useAdaptive });
+        } catch (e) { setErr(e.message || 'Deneme oluşturulamadı.'); }
+      };
+      const usePrefetched = () => {
+        const p = getPrefetched();
+        if (!p) return;
+        setPrefetched(null); setPrefetchedState(null);
+        onCreate({ ...p.exam, id: 'exam_gen_' + Date.now() });
+        if (autoNext && key) prefetchNextExam({ kind: p.kind, field: p.field, size: p.size, bp: EXAM_BLUEPRINTS[p.kind][p.size], key, cards, readings });
+      };
+      const toggleAuto = (on) => {
+        setAutoNext(on);
+        try { localStorage.setItem('yokdil_prefetch_on', on ? '1' : '0'); } catch (e) {}
+        if (on && key) prefetchNextExam({ kind, field, size, bp, key, cards, readings, adaptiveLabel: useAdaptive });
       };
       return (
         <div className="bg-gradient-to-br from-indigo-950 to-slate-950 p-5 rounded-2xl border border-indigo-800/60 space-y-3">
@@ -232,6 +325,12 @@
             <h3 className="font-bold text-lg text-white">📝 YÖKDİL / YDS tarzı deneme oluştur</h3>
             <p className="text-xs text-slate-400 mt-0.5">Gerçek sınavdaki bölüm sırasıyla: kelime ve dil bilgisi, cloze parçaları, cümle tamamlama, çeviri, paragraf tamamlama, anlam bütünlüğü ve uzun okuma parçaları (her parçaya 3 soru). Deneme "Çıkmış Sınavlarım"a kaydedilir; süreli çözülür, sonunda bölüm analizi ve açıklamalar gelir.</p>
           </div>
+          {prefetched && (
+            <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-800 text-xs text-emerald-100">
+              <span className="mr-auto">⚡ Arka planda hazırlanmış bir Claude denemesi bekliyor: <b>{prefetched.kind} · {prefetched.field} · {blueprintCount(EXAM_BLUEPRINTS[prefetched.kind][prefetched.size])} soru</b></span>
+              <button onClick={usePrefetched} className="px-3 py-1.5 rounded-lg bg-emerald-600 font-bold text-white">Hemen başlat</button>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
             <label className="text-[10px] font-bold text-slate-400">Sınav
               <select value={kind} onChange={e => setKind(e.target.value)} disabled={busy} className="mt-1 w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white">
@@ -256,16 +355,26 @@
             <span className="px-2 py-0.5 rounded bg-indigo-900 text-indigo-200 font-bold">{total} soru · {minutes} dk</span>
           </div>
           <label className={"flex items-center gap-2 text-[11px] " + (adapted.changed ? 'text-slate-300' : 'text-slate-600')}>
-            <input type="checkbox" checked={adaptive && adapted.changed} disabled={!adapted.changed || busy} onChange={e => setAdaptive(e.target.checked)} className="accent-amber-500" />
+            <input type="checkbox" checked={useAdaptive} disabled={!adapted.changed || busy} onChange={e => setAdaptive(e.target.checked)} className="accent-amber-500" />
             🎯 Zayıf bölümlerime göre (son denemelerde düşük kalan bölümler ↑ artar, iyi gidenler ↓ azalır)
             {!adapted.changed && <span className="text-slate-600">— önce en az bir tam deneme çözün</span>}
           </label>
           <div className="flex flex-wrap items-center gap-2">
-            <button disabled={busy} onClick={() => run(true)} className="px-4 py-2 rounded-lg bg-indigo-600 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50">✨ Claude ile oluştur (tüm bölümler)</button>
-            <button disabled={busy} onClick={() => run(false)} className="px-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50">⚙ Ücretsiz oluştur (kendi metin ve kartlarımdan)</button>
+            <button disabled={busy || (bankInfo && bankInfo.error)} onClick={() => run('bank')} className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50">⚡ Hazır bankadan oluştur (anında, ücretsiz)</button>
+            <button disabled={busy} onClick={() => run('ai')} className="px-4 py-2 rounded-lg bg-indigo-600 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-50">✨ Claude ile yeni sorular</button>
+            <button disabled={busy} onClick={() => run('offline')} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200 hover:bg-slate-700 disabled:opacity-50">⚙ Kendi metin ve kartlarımdan</button>
             <button type="button" onClick={() => setKeyOpen(!keyOpen)} className="text-[10px] text-slate-400 hover:text-indigo-300">🔑 {key ? 'Anahtar kayıtlı' : 'API anahtarı'}</button>
           </div>
-          <p className="text-[10px] text-slate-500">Ücretsiz modda kelime, cloze ve anlam bütünlüğü bölümleri kendi metin ve kartlarınızdan üretilir; okuma, çeviri ve cümle tamamlama için Claude gerekir. Claude ile tam deneme birkaç dakika sürer ve Anthropic hesabınızdan (soru sayısına göre) ücretlendirilir.</p>
+          <p className="text-[10px] text-slate-500">
+            {bankInfo && !bankInfo.error ? '⚡ Hazır banka: YDS / YÖKDİL tarzında yazılmış ' + bankInfo.total + ' özgün soru (' + bankInfo.unused + ' tanesini henüz görmediniz); aynı soru, o bölüm bitene kadar tekrar gelmez. ' : bankInfo && bankInfo.error ? '⚠ Hazır banka yüklenemedi (internet bağlantısını kontrol edin). ' : ''}
+            Claude ile her seferinde tamamen yeni sorular yazılır (Anthropic hesabınızdan ücretlendirilir). Kendi metin ve kartlarınızdan modunda yalnızca kelime, cloze ve anlam bütünlüğü bölümleri üretilir.
+          </p>
+          {key && (
+            <label className="flex items-center gap-2 text-[11px] text-slate-300">
+              <input type="checkbox" checked={autoNext} onChange={e => toggleAuto(e.target.checked)} className="accent-emerald-500" />
+              Bir sonraki Claude denemesini arka planda önceden hazırla (deneme bitince beklemeden başlarsınız)
+            </label>
+          )}
           {keyOpen && (
             <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 text-[11px] text-slate-400">
               <p>Kendi <b className="text-slate-200">Anthropic API anahtarınız</b> (console.anthropic.com → API Keys). Anahtar yalnızca bu tarayıcıda saklanır; buluta ve yedeğe gönderilmez.</p>
@@ -284,6 +393,7 @@
               ))}
             </div>
           )}
+          {note && <p className="text-[11px] text-amber-200">{note}</p>}
           {err && <p className="text-[11px] text-red-300">⚠ {err}</p>}
         </div>
       );

@@ -4,7 +4,7 @@
 // - OCR dosyaları (Tesseract worker, wasm çekirdeği, İngilizce dil verisi) ve PDF.js worker'ı: ilk kullanımda ayrı
 //   önbelleğe alınır; sonra internet yokken de resim/PDF okunabilir. Sürüm değişse de bu büyük dosyalar korunur.
 // - Firebase/Google API'leri, sözlük ve çeviri servisleri, Claude API: HİÇ dokunulmaz (giriş ve eşitleme bozulmasın)
-const VERSION = 'yokdil-v4';
+const VERSION = 'yokdil-v5';
 const APP_CACHE = VERSION + '-app';
 const CDN_CACHE = VERSION + '-cdn';
 const OCR_CACHE = 'yokdil-ocr-v1';     // büyük dosyalar: sürüm yükseltmelerinde silinmez
@@ -39,6 +39,14 @@ self.addEventListener('fetch', (event) => {
           return res;
         }).catch(() => caches.match('./index.html').then((r) => r || caches.match('./')))
       );
+      return;
+    }
+    // Veri dosyaları (hazır soru bankası): önce ağ (güncellemeler gelsin), çevrimdışıysa önbellek
+    if (url.pathname.includes('/data/')) {
+      event.respondWith(fetch(req).then((res) => {
+        if (res.ok) { const copy = res.clone(); caches.open(APP_CACHE).then((c) => c.put(req.url.split('?')[0], copy)); }
+        return res;
+      }).catch(() => caches.match(req.url.split('?')[0])));
       return;
     }
     event.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {

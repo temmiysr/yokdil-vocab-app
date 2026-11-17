@@ -73,6 +73,8 @@
   <!-- React 18, ReactDOM 18 & Babel Standalone (Cloudflare CDN - Türkiye'de yüksek hızlı ve kesintisiz) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin="anonymous"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin="anonymous"></script>
+  <!-- Yerelde (önceden derlenmemiş sürümde) Babel'in büyük dosya bilgilendirmesi hata gibi görünmesin -->
+  <script>(function () { var e = console.error; console.error = function (m) { if (typeof m === 'string' && m.indexOf('[BABEL] Note:') === 0) return; return e.apply(console, arguments); }; })();</script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js" crossorigin="anonymous"></script>
   <!-- Fallback CDN (jsdelivr) if Cloudflare is blocked by local network -->
   <script>

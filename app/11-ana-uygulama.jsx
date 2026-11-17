@@ -4,7 +4,7 @@
       const [weeks, setWeeks] = useState(() => initial[STORAGE_KEYS.WEEKS] || []);
       const [readings, setReadings] = useState(() => initial[STORAGE_KEYS.READINGS] || []);
       const [cards, setCards] = useState(() => initial[STORAGE_KEYS.VOCAB] || []);
-      const [storageWarning, setStorageWarning] = useState('');
+      const [storageWarning, setStorageWarning] = useState(() => storageWorks ? '' : 'Bu sayfa dosya ya da önizleme olarak açıldı; tarayıcı burada kayıt yapılmasına izin vermiyor, yaptığınız değişiklikler saklanmaz ve Google ile giriş çalışmaz. Uygulamayı http://localhost:3000 (baslat.bat) ya da https://temmiysr.github.io/yokdil-vocab-app/ adresinden açın.');
       const [activity, setActivity] = useState(() => initial[STORAGE_KEYS.ACTIVITY] || []);
       // Yüklenen çıkmış sınav / denemeler (IndexedDB'de; eski sürümde localStorage'daydı, loadAllData taşır)
       const [customExams, setCustomExams] = useState(() => initial[STORAGE_KEYS.EXAMS] || []);

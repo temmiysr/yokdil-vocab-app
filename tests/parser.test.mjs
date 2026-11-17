@@ -224,5 +224,39 @@ test('şıklardan konu tahmini', () => {
   assert.equal(k(['ability', 'clarity', 'reliance', 'amount', 'theory']), undefined);
 });
 
+console.log('Hazır soru bankası');
+const bankFile = new URL('../dist/data/question-bank.json', import.meta.url);
+const bank = JSON.parse(fs.readFileSync(bankFile, 'utf8'));
+// (Bankadan seçim kodu deneme oluşturucu bölümünün içinde; mockSrc onu da kapsar)
+const B = new Function('shuffleArr', parserSrc + mockSrc + '\nreturn { genSectionFromBank, EXAM_BLUEPRINTS, assembleMockExam, QTYPES };')((a) => [...a].sort(() => Math.random() - 0.5));
+test('her soru geçerli (5 farklı şık, cevap, açıklama, boşluk)', () => {
+  const ids = new Set();
+  for (const g of bank.groups) {
+    assert.ok(!ids.has(g.id), 'tekrarlanan id ' + g.id); ids.add(g.id);
+    assert.ok(B.QTYPES.includes(g.type), g.id + ' tür ' + g.type);
+    for (const q of g.questions) {
+      assert.equal(q.options.length, 5, g.id); assert.equal(new Set(q.options).size, 5, g.id + ' aynı şık');
+      assert.ok(q.answer >= 0 && q.answer <= 4, g.id + ' cevap'); assert.ok(q.explanation_tr, g.id + ' açıklama');
+      if (['Kelime & Dil Bilgisi', 'Cümle Tamamlama', 'Paragraf Tamamlama', 'Diyalog'].includes(g.type)) assert.match(q.prompt, /-{4}/, g.id + ' boşluk');
+    }
+    if (g.type === 'Cloze Test') g.questions.forEach((_, k) => assert.ok(g.passage.includes('(' + (k + 1) + ') ----'), g.id + ' cloze ' + (k + 1)));
+    if (g.type === 'Okuma') assert.equal(g.questions.length, 3, g.id);
+  }
+});
+test('tam YÖKDİL ve YDS denemesi bankadan kurulabiliyor', () => {
+  for (const kind of ['YÖKDİL', 'YDS']) {
+    const used = new Set();
+    const out = B.EXAM_BLUEPRINTS[kind].full.map(spec => ({ type: spec.type, groups: B.genSectionFromBank(bank, spec, 'Fen Bilimleri', used).groups }));
+    const qs = B.assembleMockExam(out);
+    assert.equal(qs.length, 80, kind + ' soru sayısı');
+  }
+});
+test('kısa cloze: fazla boşluk doğru cevapla doldurulur', () => {
+  const g = bank.groups.find(x => x.type === 'Cloze Test');
+  const r = B.genSectionFromBank({ groups: [g] }, { type: 'Cloze Test', passages: 1, per: 4 }, 'Genel', new Set());
+  assert.equal(r.groups[0].questions.length, 4);
+  assert.ok(!r.groups[0].passage.includes('(5) ----'));
+});
+
 console.log('\n' + passed + ' test geçti' + (failed ? ', ' + failed + ' test BAŞARISIZ' : ''));
 if (failed) process.exit(1);

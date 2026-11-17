@@ -7,6 +7,7 @@ Kişisel YÖKDİL / YDS hazırlık uygulaması (React 18, tarayıcıda çalışa
 - `app/index.template.html`: sayfa iskeleti (CDN kütüphaneleri, PWA, Firebase ayarları); `/*@@APP_KODU@@*/` yerine kod eklenir.
 - `dist/index.html` **üretilen dosyadır**: `node scripts/assemble.mjs` ile app/'tan yazılır. Elle düzenlemeyin; app/ değişince yeniden üretip birlikte commit edin (yayın işi `--check` ile kontrol eder).
 - `dist/sw.js` (çevrimdışı önbellek), `dist/manifest.webmanifest`, ikonlar: doğrudan dist/ içinde.
+- `dist/data/question-bank.json`: hazır soru bankası (YDS / YÖKDİL tarzında, bu uygulama için yazılmış özgün sorular; ÖSYM sorusu DEĞİL). Biçim: `{ groups: [{ id, type (QTYPES), field, passage, questions: [{ prompt, options[5], answer 0-4, explanation_tr }] }] }`; cloze parçalarında boşluklar "(1) ----". Yeni soru eklerken testler (`tests/parser.test.mjs`) biçimi ve tam deneme kurulabilirliğini denetler.
 - `src/` eski Vite kaynağıdır; kullanılmıyor.
 
 ## Çalıştırma ve kontrol

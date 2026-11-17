@@ -15,15 +15,21 @@
     // Sonuçlar zaten uygulamanın kendi önbelleğinde (freq/dict cache) tutuluyor.
     // Datamuse'un sunucu önbelleği izin başlığını adres ayırt etmeden 24 saat saklıyor; adrese özel parametre ile ayrı önbellek
     const ORIGIN_TAG = (() => { try { return btoa(location.origin).replace(/[^a-z0-9]/gi, '').slice(-12); } catch (e) { return 'x'; } })();
+    // dictionaryapi.dev bulunamayan kelimede izin başlığı olmayan 404 döndürür; tarayıcı bunu ağ hatası sayar.
+    // Bu yüzden orada tekrar denenmez ve aynı kelime oturum boyunca bir daha istenmez (konsolu da hata ile doldurmaz).
+    const notFoundUrls = new Set();
     const fetchJson = async (url, tries = 3) => {
       if (/api\.datamuse\.com/.test(url)) url += (url.includes('?') ? '&' : '?') + 'o=' + ORIGIN_TAG;
+      const isDict = /api\.dictionaryapi\.dev/.test(url);
+      if (isDict && notFoundUrls.has(url)) return null;
       for (let a = 0; a < tries; a++) {
         try {
           const r = await fetch(url, { cache: 'no-store' });
-          if (r.status === 404) return null;
+          if (r.status === 404) { if (isDict) notFoundUrls.add(url); return null; }
           if (!r.ok) throw new Error('HTTP ' + r.status);
           return await r.json();
         } catch (e) {
+          if (isDict && e instanceof TypeError && navigator.onLine !== false) { notFoundUrls.add(url); return null; }
           if (a === tries - 1) throw e;
           await sleep(500 * (a + 1));
         }

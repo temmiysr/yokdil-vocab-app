@@ -16,8 +16,11 @@
     const SYNC_MAX_BYTES = 900000;
 
     let fbCache = null;
+    // Tarayıcı depolamayı kapattıysa (dosya olarak / önizlemede açılan sayfa, bazı gizli pencereler) Firebase başlatılmaz:
+    // aksi hâlde Firestore yakalanmamış "localStorage" hatası fırlatır. Bu durumda bulut eşitleme kapalı kalır.
+    const storageWorks = (() => { try { const k = '__yk_test'; localStorage.setItem(k, '1'); localStorage.removeItem(k); return !!window.indexedDB; } catch (e) { return false; } })();
     const getFirebase = () => {
-      if (!window.firebase) return null;
+      if (!window.firebase || !storageWorks) return null;
       if (!fbCache) {
         try {
           if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
