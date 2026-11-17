@@ -258,5 +258,23 @@ test('kısa cloze: fazla boşluk doğru cevapla doldurulur', () => {
   assert.ok(!r.groups[0].passage.includes('(5) ----'));
 });
 
+console.log('Sınav takvimi');
+const calSrc = slice('// --- SINAV TAKVİMİ VE SAYAÇ', '    const trDate');
+const CAL = new Function(calSrc + '\nreturn EXAM_CALENDAR;')();
+test('tarihler tutarlı (başvuru < geç başvuru < sınav ≤ sonuç)', () => {
+  const ids = new Set();
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  for (const e of CAL) {
+    assert.ok(!ids.has(e.id), 'tekrar ' + e.id); ids.add(e.id);
+    [e.date, ...e.app, e.late, e.result].filter(Boolean).forEach(d => assert.match(d, iso, e.id));
+    assert.ok(e.app[0] <= e.app[1] && e.app[1] < e.date, e.id + ' başvuru');
+    if (e.late) assert.ok(e.app[1] < e.late && e.late < e.date, e.id + ' geç başvuru');
+    if (e.result) assert.ok(e.result >= e.date, e.id + ' sonuç');
+    assert.ok(['YDS', 'YÖKDİL', 'e-YDS', 'e-YÖKDİL'].includes(e.kind), e.id);
+  }
+  const sorted = [...CAL].sort((a, b) => a.date.localeCompare(b.date));
+  assert.deepEqual(CAL.map(e => e.id), sorted.map(e => e.id), 'tarih sırası');
+});
+
 console.log('\n' + passed + ' test geçti' + (failed ? ', ' + failed + ' test BAŞARISIZ' : ''));
 if (failed) process.exit(1);

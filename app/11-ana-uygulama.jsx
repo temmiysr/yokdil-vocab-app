@@ -642,6 +642,7 @@
                   <BackupReminder lastBackupAt={settings.lastBackupAt} snoozeUntil={settings.backupSnooze} hasData={cards.length + readings.length + customExams.length > 0}
                     onDownload={exportBackup} onFolderBackup={() => folderBackup(true)} onPickFolder={pickBackupFolder} folderName={backupDir && backupDir.name}
                     onSnooze={() => setSettings(s => ({ ...s, backupSnooze: addDays(getTodayStr(), 1) }))} />
+                  <ExamCalendarCard settings={settings} setSettings={setSettings} />
                   <DailyPlanCard
                     due={dueCards.length} todayRec={todayRec} readingsCount={readings.length}
                     mistakesDue={mistakeQuestions(customExams).length} queued={cards.filter(c => c.queued).length}
@@ -695,7 +696,7 @@
                       <div className="h-1.5 mt-1 rounded bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500" style={{ width: Math.min(100, (todayRec.reviews || 0) / (settings.dailyGoal || 20) * 100) + '%' }} /></div>
                     </button>
                     <button onClick={() => setActiveTab('stats')} className="text-left bg-slate-950 p-4 rounded-2xl border border-slate-800 hover:border-indigo-600 transition">
-                      <p className="text-[11px] text-slate-400">📅 Sınava</p>
+                      <p className="text-[11px] text-slate-400 truncate">📅 {settings.examName && settings.examId ? settings.examName : 'Sınava'}</p>
                       <p className="text-xl font-black text-indigo-300">{examLeft == null ? 'Tarih gir' : examLeft > 0 ? examLeft + ' gün' : examLeft === 0 ? 'Bugün' : '—'}</p>
                     </button>
                   </div>

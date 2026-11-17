@@ -240,11 +240,18 @@
           {/* Sınav sayacı + hedef + seri */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-gradient-to-br from-indigo-700 to-blue-800 p-5 rounded-2xl text-white space-y-2">
-              <p className="text-xs text-blue-100">📅 YÖKDİL sınavına</p>
+              <p className="text-xs text-blue-100">📅 {settings.examName && settings.examId ? settings.examName : 'Sınavıma'} kalan</p>
               <p className="text-3xl font-black">{left == null ? '—' : left > 0 ? left + ' gün' : left === 0 ? 'Bugün!' : 'Geçti'}</p>
               <label className="block text-[11px] text-blue-100">Sınav tarihi
-                <input type="date" value={settings.examDate || ''} onChange={e => setSettings({ ...settings, examDate: e.target.value })}
+                <input type="date" value={settings.examDate || ''} onChange={e => setSettings({ ...settings, examDate: e.target.value, examId: null, examName: '' })}
                        className="mt-1 w-full px-2 py-1 rounded-md bg-white/15 border border-white/20 text-white text-xs" />
+              </label>
+              <label className="block text-[11px] text-blue-100">ya da ÖSYM takviminden seçin
+                <select value={settings.examId || ""} onChange={e => { const x = EXAM_CALENDAR.find(c => c.id === e.target.value); setSettings(x ? { ...settings, examId: x.id, examDate: x.date, examName: x.name } : { ...settings, examId: null, examName: "" }); }}
+                        className="mt-1 w-full px-2 py-1 rounded-md bg-white/15 border border-white/20 text-white text-xs">
+                  <option value="" className="text-slate-900">— seçilmedi —</option>
+                  {EXAM_CALENDAR.filter(c => c.date >= getTodayStr()).map(c => <option key={c.id} value={c.id} className="text-slate-900">{c.name} · {new Date(c.date + "T00:00:00").toLocaleDateString("tr-TR")}</option>)}
+                </select>
               </label>
               {left > 0 && cards.length > 0 && <p className="text-[11px] text-blue-100">Günde ~{Math.ceil(Math.max(0, 600 - cards.length) / left)} yeni kelime ile sınava kadar 600 kelimeye ulaşırsınız.</p>}
             </div>
