@@ -1,7 +1,8 @@
 name: Deploy to GitHub Pages
 
 # Uygulamanın güncel sürümü dist/ klasöründedir (tek dosyalık dist/index.html).
-# Yayından önce: ayrıştırıcı testleri çalışır (tests/parser.test.mjs), sonra scripts/build.mjs JSX kodunu
+# Uygulama kodu app/*.jsx dosyalarındadır; scripts/assemble.mjs bunları dist/index.html olarak birleştirir.
+# Yayından önce: dist/index.html güncel mi kontrol edilir, ayrıştırıcı testleri çalışır (tests/parser.test.mjs), sonra scripts/build.mjs JSX kodunu
 # önceden derleyip _site/ klasörüne yazar (tarayıcı Babel indirmez, site hızlı açılır). Yayınlanan: _site/.
 # (src/ eski Vite kaynak kodudur.)
 #
@@ -45,6 +46,9 @@ jobs:
 
       - name: Install Babel (build only)
         run: npm install --no-save --prefix /tmp/babel @babel/standalone@7.26.4
+
+      - name: Check dist/index.html is assembled from app/
+        run: node scripts/assemble.mjs --check
 
       - name: Run parser tests
         run: node tests/parser.test.mjs

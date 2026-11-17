@@ -28,9 +28,24 @@ const MIME_TYPES = {
   '.csv': 'text/csv; charset=UTF-8',
 };
 
+// Uygulama kodu app/ klasöründe parça parça durur; ana sayfa her istekte bu parçalardan güncel olarak birleştirilir
+// (dosya bir sebeple birleştirilemezse dist/index.html olduğu gibi sunulur).
+let assemble = null;
+try { ({ assemble } = await import('./scripts/assemble.mjs')); } catch (e) { assemble = null; }
+
 const server = http.createServer((req, res) => {
   let reqPath = decodeURI(req.url.split('?')[0]);
   if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
+  if (reqPath === '/index.html' && assemble) {
+    try {
+      const html = assemble();
+      res.writeHead(200, { 'Content-Type': MIME_TYPES['.html'], 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*' });
+      res.end(html, 'utf-8');
+      return;
+    } catch (e) {
+      console.warn('[Bilgi] app/ birleştirilemedi, dist/index.html sunuluyor:', e.message);
+    }
+  }
 
   let filePath = path.join(DIST_DIR, reqPath);
 

@@ -211,5 +211,18 @@ test('numaralandırma ve cloze boşlukları', () => {
   assert.deepEqual(M.examSections({ questions: qs }).map(s => s.label + ' ' + s.from + '-' + s.to), ['Kelime & Dil Bilgisi 1-2', 'Cloze Test 3-4', 'Okuma 5-7']);
 });
 
+console.log('Dil bilgisi konuları');
+const grammarSrc = slice('// --- DİL BİLGİSİ KONU NOTLARI', '    async function genGrammarDrill');
+const LINKER_STUB = 'const LINKER_LIST = [{ w: "however" }, { w: "although" }, { w: "therefore" }, { w: "whereas" }, { w: "despite" }]; const PREP_OPTIONS = ["to","of","from","in","on","with","for","at"];';
+const G = new Function(parserSrc + LINKER_STUB + grammarSrc + '\nreturn { grammarTopicOf };')();
+test('şıklardan konu tahmini', () => {
+  const k = (opts, prompt = 'The results ---- clear.') => (G.grammarTopicOf({ num: 9, category: 'Kelime & Dil Bilgisi', prompt, options: opts }) || {}).key;
+  assert.equal(k(['which', 'whose', 'that', 'whom', 'what']), 'relative');
+  assert.equal(k(['however', 'although', 'therefore', 'whereas', 'despite']), 'linker');
+  assert.equal(k(['in / of', 'on / to', 'at / from', 'with / for', 'of / in']), 'prep');
+  assert.equal(k(['had been / would', 'has been / will', 'was / would have', 'is / will have', 'were / had']), 'tense');
+  assert.equal(k(['ability', 'clarity', 'reliance', 'amount', 'theory']), undefined);
+});
+
 console.log('\n' + passed + ' test geçti' + (failed ? ', ' + failed + ' test BAŞARISIZ' : ''));
 if (failed) process.exit(1);
