@@ -187,5 +187,29 @@ test('sözlük satırı: tür, anlamlar ve IPA', () => {
   assert.equal(r.pos, 'noun'); assert.equal(r.turkish, 'örnek, numune; örneklemek'); assert.equal(r.ipa, 'ˈsɑːmp(ə)l'); assert.equal(r.hyphenation, 'sam·ple');
 });
 
+console.log('Deneme oluşturucu');
+const mockSrc = slice('// --- YÖKDİL / YDS TARZI DENEME OLUŞTURUCU', '    function MockExamBuilder');
+const M = new Function(parserSrc + mockSrc + '\nreturn { assembleMockExam, EXAM_BLUEPRINTS, blueprintCount, examSections };')();
+test('şablonlar doğru soru sayısında', () => {
+  for (const kind of ['YÖKDİL', 'YDS']) {
+    assert.equal(M.blueprintCount(M.EXAM_BLUEPRINTS[kind].full), 80, kind + ' tam');
+    assert.equal(M.blueprintCount(M.EXAM_BLUEPRINTS[kind].half), 40, kind + ' yarım');
+    assert.equal(M.blueprintCount(M.EXAM_BLUEPRINTS[kind].mini), 20, kind + ' mini');
+  }
+});
+test('numaralandırma ve cloze boşlukları', () => {
+  const q = (p) => ({ prompt: p, options: ['a', 'b', 'c', 'd', 'e'], answer: 1, explanation_tr: 'x' });
+  const qs = M.assembleMockExam([
+    { type: 'Kelime & Dil Bilgisi', groups: [{ passage: '', questions: [q('One ----.')] }, { passage: '', questions: [q('Two ----.')] }] },
+    { type: 'Cloze Test', groups: [{ passage: 'Alpha (1) ---- beta (2) ---- gamma.', questions: [q(''), q('')] }] },
+    { type: 'Okuma', groups: [{ passage: 'Long text.', questions: [q('Q1 ----.'), q('Q2 ----.'), q('Q3 ----.')] }] },
+  ]);
+  assert.deepEqual(qs.map(x => x.num), [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(qs[2].passage, 'Alpha (3) ---- beta (4) ---- gamma.');
+  assert.equal(qs[6].passage, 'Long text.');
+  assert.equal(qs[0].correctLetter, 'B');
+  assert.deepEqual(M.examSections({ questions: qs }).map(s => s.label + ' ' + s.from + '-' + s.to), ['Kelime & Dil Bilgisi 1-2', 'Cloze Test 3-4', 'Okuma 5-7']);
+});
+
 console.log('\n' + passed + ' test geçti' + (failed ? ', ' + failed + ' test BAŞARISIZ' : ''));
 if (failed) process.exit(1);
