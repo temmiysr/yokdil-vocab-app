@@ -1,6 +1,8 @@
     // --- ANA UYGULAMA BİLEŞENİ ---
     function App({ initial, storageMode }) {
       const [activeTab, setActiveTab] = useState('dashboard');
+      const [learnMode, setLearnMode] = useState('learn');   // 'learn' | 'quiz'
+      const [learnRound, setLearnRound] = useState(0);
       const [weeks, setWeeks] = useState(() => initial[STORAGE_KEYS.WEEKS] || []);
       const [readings, setReadings] = useState(() => initial[STORAGE_KEYS.READINGS] || []);
       const [cards, setCards] = useState(() => initial[STORAGE_KEYS.VOCAB] || []);
@@ -436,7 +438,39 @@
 
       // Hesaplamalar
       const today = getTodayStr();
-      const dueCards = cards.filter(c => c.srs.nextReviewAt <= today);
+      // Yeni kelimeler önce "Yeni Kelimeler" oturumunda öğretilir; bugün öğrenilip henüz sınavı yapılmayanlar da tekrara girmez
+      const dueCards = cards.filter(c => c.srs.nextReviewAt <= today && !isUnlearnedNew(c) && !needsQuizToday(c));
+      const learnDue = learnPool(cards).length;
+      const quizDue = cards.filter(needsQuizToday).length;
+      // Bağlantıyla açılış (Telegram mesajı / bildirim): ?go=learn | quiz | review
+      useEffect(() => {
+        let go = null;
+        try { go = new URLSearchParams(location.search).get('go'); } catch (e) {}
+        if (!go) return;
+        if (go === 'learn') { setLearnMode('learn'); setActiveTab('learn'); }
+        else if (go === 'quiz') { setLearnMode('quiz'); setActiveTab('learn'); }
+        else if (go === 'review') setActiveTab('daily-review');
+        try { history.replaceState(null, '', location.pathname); } catch (e) {}
+      }, []);
+      // Uygulama açıkken hatırlatıcı bildirimleri: sabah "yeni kelimeler", akşam "günün kelime sınavı / tekrar"
+      useEffect(() => {
+        const check = () => {
+          if (!settings.remindersOn || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+          const d = new Date(), hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+          const today = getTodayStr();
+          if (hm >= (settings.morningTime || '09:00') && settings.lastMorningNote !== today && learnDue > 0) {
+            setSettings(s => ({ ...s, lastMorningNote: today }));
+            showStudyNotification('📘 Günün yeni kelimeleri hazır', Math.min(learnDue, settings.learnPerDay || 10) + ' yeni kelime sizi bekliyor. Önce öğretici kartlarla öğrenin.', 'learn');
+          }
+          if (hm >= (settings.eveningTime || '20:00') && settings.lastEveningNote !== today && (quizDue > 0 || dueCards.length > 0)) {
+            setSettings(s => ({ ...s, lastEveningNote: today }));
+            showStudyNotification(quizDue > 0 ? '🌙 Günün kelime sınavı' : '🔄 Tekrar zamanı', quizDue > 0 ? 'Bugün öğrendiğiniz ' + quizDue + ' kelimeden kısa bir sınav.' : dueCards.length + ' kart tekrar bekliyor.', quizDue > 0 ? 'quiz' : 'review');
+          }
+        };
+        check();
+        const t = setInterval(check, 60000);
+        return () => clearInterval(t);
+      }, [settings.remindersOn, settings.morningTime, settings.eveningTime, settings.lastMorningNote, settings.lastEveningNote, learnDue, quizDue, dueCards.length]);
       // Zorlandığım kelimeleri tarih beklemeden tekrar etmek için (null = normal günlük tekrar)
       const [extraReviewIds, setExtraReviewIds] = useState(null);
       const reviewCards = extraReviewIds ? cards.filter(c => extraReviewIds.includes(c.id)) : dueCards;
@@ -509,6 +543,7 @@
       // Menü öğeleri (masaüstü yan menü + telefon alt menüsü ortak)
       const navItems = [
         { id: 'dashboard', label: 'Ana Sayfa', short: 'Ana', icon: '📊' },
+        { id: 'learn', label: 'Yeni Kelimeler', short: 'Öğren', icon: '📘', badge: learnDue + quizDue },
         { id: 'daily-review', label: 'Günlük Tekrar', short: 'Tekrar', icon: '🔄', badge: dueCards.length },
         { id: 'weeks', label: 'Haftalık Listelerim', icon: '📅' },
         { id: 'readings', label: 'Okuma Parçalarım', short: 'Metinler', icon: '📖' },
@@ -519,7 +554,7 @@
         { id: 'stats', label: 'İstatistikler', icon: '📈' },
         { id: 'settings', label: 'Ayarlar', icon: '⚙️' },
       ];
-      const MOBILE_MAIN = ['dashboard', 'daily-review', 'readings', 'flashcards', 'study'];
+      const MOBILE_MAIN = ['dashboard', 'learn', 'daily-review', 'flashcards', 'study'];
       const goTab = (id) => {
         setActiveTab(id);
         setMoreOpen(false);
@@ -651,6 +686,8 @@
                     onMistakes={() => { setExamPreset({ mistakes: true }); setActiveTab('study'); }}
                     onReading={() => setActiveTab('readings')}
                     onDrill={() => { setExamPreset({ drill: 10 }); setActiveTab('study'); }}
+                    learnDue={learnDue} learnPerDay={settings.learnPerDay || 10} quizDue={quizDue} learnedToday={cards.filter(c => c.learnedAt === today).length}
+                    onLearn={() => { setLearnMode('learn'); setActiveTab('learn'); }} onQuiz={() => { setLearnMode('quiz'); setActiveTab('learn'); }}
                   />
                   <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-slate-900 rounded-3xl p-8 text-white shadow-xl relative overflow-hidden">
                     <h2 className="text-2xl font-black">
@@ -798,6 +835,46 @@
                         logActivity({ reviews: 1, correct: rating >= 3 ? 1 : 0, again: rating === 1 ? 1 : 0 });
                       }}
                     />
+                  )}
+                </div>
+              )}
+
+              {/* YENİ KELİMELER: öğretici kartlar + günün kelime sınavı */}
+              {activeTab === 'learn' && (
+                <div className="space-y-4">
+                  {learnMode === 'quiz' ? (
+                    <DailyWordQuiz key={'quiz-' + getTodayStr()} cards={cards}
+                      onExit={() => { setLearnMode('learn'); setActiveTab('dashboard'); }}
+                      onLearn={() => setLearnMode('learn')}
+                      onFinish={(grades) => {
+                        const today = getTodayStr(), now = new Date().toISOString();
+                        const g = new Map(grades.map(x => [x.id, x]));
+                        setCards(prev => prev.map(c => g.has(c.id) ? { ...c, quizzedAt: today, srs: processReview(c.srs, g.get(c.id).grade), updatedAt: now } : c));
+                        const ok = grades.reduce((a, x) => a + x.ok, 0), n = grades.reduce((a, x) => a + x.n, 0);
+                        logActivity({ examQ: n, examCorrect: ok, wordQuizzes: 1 }, { 'Günün kelimeleri': [ok, n] });
+                      }} />
+                  ) : (
+                    <>
+                      {quizDue > 0 && (
+                        <div className="max-w-xl mx-auto flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-indigo-950/50 border border-indigo-800 text-xs text-indigo-100">
+                          <span className="mr-auto">🌙 Bugün öğrendiğiniz {quizDue} kelimenin sınavı hazır.</span>
+                          <button onClick={() => setLearnMode('quiz')} className="px-3 py-1.5 rounded-lg bg-indigo-600 font-bold text-white">Günün kelime sınavı</button>
+                        </div>
+                      )}
+                      <LearnSession key={'learn-' + getTodayStr() + '-' + learnRound} cards={cards} perDay={settings.learnPerDay || 10}
+                        onExit={() => setActiveTab('dashboard')}
+                        onQuiz={() => setLearnMode('quiz')}
+                        onLearn={(learnedIds, knownIds) => {
+                          const today = getTodayStr(), now = new Date().toISOString();
+                          const L = new Set(learnedIds), K = new Set(knownIds);
+                          setCards(prev => prev.map(c => L.has(c.id) ? { ...c, learnedAt: today, updatedAt: now }
+                            : K.has(c.id) ? { ...c, learnedAt: today, quizzedAt: today, knownAtLearn: true, srs: { ...c.srs, state: 'review', interval: 30, repetitions: 1, lastReviewedAt: today, nextReviewAt: addDays(today, 30) }, updatedAt: now } : c));
+                          if (learnedIds.length || knownIds.length) logActivity({ learned: learnedIds.length, newCards: learnedIds.length });
+                        }} />
+                      {learnDue > (settings.learnPerDay || 10) && (
+                        <p className="max-w-xl mx-auto text-center text-[11px] text-slate-500">Bu oturumda {settings.learnPerDay || 10} kelime gelir; sırada {learnDue} yeni kelime var. Günlük sayıyı Ayarlar → Hatırlatıcılar'dan değiştirebilirsiniz. <button onClick={() => setLearnRound(r => r + 1)} className="text-blue-400 hover:underline">Bir oturum daha</button></p>
+                      )}
+                    </>
                   )}
                 </div>
               )}
@@ -1112,6 +1189,7 @@
               {/* AYARLAR */}
               {activeTab === 'settings' && (
                 <div className="max-w-xl mx-auto space-y-6">
+                  <ReminderSettings settings={settings} setSettings={setSettings} />
                   <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
                     <h3 className="font-bold text-base text-white">Telegram Bildirim Ayarları</h3>
                     <div>

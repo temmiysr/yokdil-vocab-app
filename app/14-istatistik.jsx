@@ -27,9 +27,13 @@
     }
 
     // Ana sayfadaki "Bugün" kartı: günün işleri ve ilerleme
-    function DailyPlanCard({ due, todayRec, readingsCount, mistakesDue, queued, perDay, onReview, onMistakes, onReading, onDrill }) {
+    function DailyPlanCard({ due, todayRec, readingsCount, mistakesDue, queued, perDay, onReview, onMistakes, onReading, onDrill, learnDue = 0, learnPerDay = 10, quizDue = 0, learnedToday = 0, onLearn, onQuiz }) {
       const reviewed = todayRec.reviews || 0;
       const tasks = [
+        { key: 'learn', icon: '📘', label: learnDue > 0 ? 'Yeni kelimeleri öğren: ' + Math.min(learnDue, learnPerDay) + ' kelime' : learnedToday ? 'Yeni kelimeler öğrenildi (' + learnedToday + ')' : 'Bugün yeni kelime yok', done: learnDue === 0, onClick: onLearn, btn: 'Öğren',
+          sub: learnDue > learnPerDay ? 'Sırada ' + learnDue + ' yeni kelime var' : '' },
+        { key: 'quiz', icon: '🌙', label: quizDue > 0 ? 'Günün kelime sınavı: ' + quizDue + ' kelime' : learnedToday ? 'Günün kelime sınavı tamam' : 'Günün kelime sınavı (önce kelime öğrenin)', done: quizDue === 0 && learnedToday > 0, onClick: onQuiz, btn: 'Çöz', disabled: quizDue === 0,
+          sub: quizDue > 0 ? 'Öğrendikten birkaç saat sonra çözmek akılda kalıcılığı artırır' : '' },
         { key: 'review', icon: '🔄', label: due > 0 ? 'Kelime tekrarı: ' + due + ' kart kaldı' : reviewed ? 'Kelime tekrarı bitti (' + reviewed + ' kart)' : 'Bugün tekrar edilecek kart yok', done: due === 0, onClick: onReview, btn: 'Başla',
           sub: queued > 0 ? 'Listelerden her gün ' + perDay + ' yeni kelime ekleniyor · sırada ' + queued : '' },
         { key: 'mistakes', icon: '📕', label: mistakesDue > 0 ? 'Yanlışlarım: ' + mistakesDue + ' soru' : 'Yanlışlarım: bugün tekrar yok', done: mistakesDue === 0, onClick: onMistakes, btn: 'Çöz' },

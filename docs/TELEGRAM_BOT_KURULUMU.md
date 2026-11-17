@@ -37,14 +37,15 @@ GitHub Pages statik bir barındırma hizmeti olduğundan, tarayıcı veya web sa
 
 ## 4. GitHub Actions ile Günlük Otomatik Zamanlama Kurulumu
 
-Bildirimlerin her gün istediğiniz saatte otomatik telefonunuza gelmesi için:
+Her gün iki mesaj gelir: sabah **09:00**'da "Günün yeni kelimeleri" (bağlantı uygulamayı `?go=learn` ile öğrenme ekranında açar) ve akşam **20:00**'de "Günün kelime sınavı" (`?go=quiz`). Kurmak için:
 
 1. Uygulamanızın GitHub deposuna gidin.
 2. **Settings -> Secrets and variables -> Actions** menüsünü açın.
 3. **New repository secret** butonuna basarak şu 3 gizli değişkeni ekleyin:
    - `TELEGRAM_BOT_TOKEN`: 1. adımda aldığınız bot token.
    - `TELEGRAM_CHAT_ID`: 2. adımda aldığınız sohbet ID numarası.
-   - `APP_URL`: GitHub Pages üzerinde yayımlanan sitenizin adresi (Örn: `https://kullanici.github.io/yokdil-vocab-app/`).
+   - `APP_URL` (isteğe bağlı): sitenin adresi. Yazmazsanız `https://temmiysr.github.io/yokdil-vocab-app/` kullanılır.
+4. Hemen denemek için **Actions → Telegram Daily Study Reminders → Run workflow** (kind: `sabah` ya da `aksam`).
 
 ---
 
@@ -54,5 +55,5 @@ Bildirimlerin her gün istediğiniz saatte otomatik telefonunuza gelmesi için:
 - **Türkiye Saati (TSİ):** Türkiye, yıl boyu sabit **UTC + 3** saat dilimindedir.
 - **Dönüşüm Formülü:** `UTC Saati = İstenen Türkiye Saati - 3 Saat`
   - Örneğin akşam saat **20:00 (TSİ)** bildirim almak istiyorsanız: `20 - 3 = 17:00 UTC`
-  - Deponuzdaki `.github/workflows/telegram-reminder.yml` dosyası varsayılan olarak `cron: '0 17 * * *'` (Türkiye saatiyle 20:00) olarak yapılandırılmıştır.
+  - Deponuzdaki `.github/workflows/telegram-reminder.yml` dosyası `cron: '0 6 * * *'` (09:00) ve `cron: '0 17 * * *'` (20:00) ile yapılandırılmıştır.
 - **Zamanlayıcı Jitter Uyarısı:** GitHub Actions paylaşımlı altyapı kullandığı için, dünya genelindeki yoğunluk durumuna bağlı olarak zamanlanmış görevleri 5 ila 25 dakika arasında gecikmeyle tetikleyebilir. Bu durum GitHub'ın standart davranışıdır.

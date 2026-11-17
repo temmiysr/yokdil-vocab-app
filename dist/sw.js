@@ -4,7 +4,7 @@
 // - OCR dosyaları (Tesseract worker, wasm çekirdeği, İngilizce dil verisi) ve PDF.js worker'ı: ilk kullanımda ayrı
 //   önbelleğe alınır; sonra internet yokken de resim/PDF okunabilir. Sürüm değişse de bu büyük dosyalar korunur.
 // - Firebase/Google API'leri, sözlük ve çeviri servisleri, Claude API: HİÇ dokunulmaz (giriş ve eşitleme bozulmasın)
-const VERSION = 'yokdil-v5';
+const VERSION = 'yokdil-v6';
 const APP_CACHE = VERSION + '-app';
 const CDN_CACHE = VERSION + '-cdn';
 const OCR_CACHE = 'yokdil-ocr-v1';     // büyük dosyalar: sürüm yükseltmelerinde silinmez
@@ -71,13 +71,57 @@ self.addEventListener('fetch', (event) => {
   // Diğer her şey (Firebase, Firestore, Google girişi, sözlük/çeviri API'leri): tarayıcıya bırak
 });
 
-// Bildirime tıklanınca uygulamayı aç
+// Bildirime tıklanınca uygulamayı ilgili ekranda aç (?go=learn | quiz | review)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || './';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-      for (const c of list) if ('focus' in c) return c.focus();
-      if (clients.openWindow) return clients.openWindow('./');
+      for (const c of list) {
+        if ('focus' in c) { if ('navigate' in c && target !== './') c.navigate(target).catch(() => {}); return c.focus(); }
+      }
+      if (clients.openWindow) return clients.openWindow(target);
     })
   );
+});
+
+// Android'de ana ekrana eklenmiş uygulama: tarayıcı izin verdikçe arka planda günlük hatırlatma.
+// Veriler uygulamanın kendi IndexedDB'sinden okunur; günde en çok bir sabah ve bir akşam bildirimi gösterilir.
+const idbGet = (key) => new Promise((resolve) => {
+  const r = indexedDB.open('yokdil-master');
+  r.onerror = () => resolve(null);
+  r.onsuccess = () => {
+    try { const q = r.result.transaction('kv').objectStore('kv').get(key); q.onsuccess = () => resolve(q.result); q.onerror = () => resolve(null); }
+    catch (e) { resolve(null); }
+  };
+});
+const idbSet = (key, val) => new Promise((resolve) => {
+  const r = indexedDB.open('yokdil-master');
+  r.onerror = () => resolve();
+  r.onsuccess = () => { try { const tx = r.result.transaction('kv', 'readwrite'); tx.objectStore('kv').put(val, key); tx.oncomplete = () => resolve(); } catch (e) { resolve(); } };
+});
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag !== 'yokdil-daily') return;
+  event.waitUntil((async () => {
+    const settings = (await idbGet('yokdil_user_settings_v1')) || {};
+    if (!settings.remindersOn) return;
+    const cards = (await idbGet('yokdil_vocab_cards_v1')) || [];
+    const d = new Date();
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const shown = (await idbGet('sw_reminder_shown')) || {};
+    const isNew = (c) => c && !c.queued && c.srs && c.srs.state === 'new' && !c.srs.lastReviewedAt && !c.learnedAt && c.srs.nextReviewAt <= today;
+    const learn = cards.filter(isNew).length;
+    const quiz = cards.filter(c => c.learnedAt === today && c.quizzedAt !== today).length;
+    const due = cards.filter(c => c.srs && c.srs.nextReviewAt <= today && !isNew(c) && !(c.learnedAt === today && c.quizzedAt !== today)).length;
+    const show = (title, body, go) => self.registration.showNotification(title, { body, icon: './icon-192.png', badge: './icon-192.png', tag: 'yokdil-' + go, data: { url: './?go=' + go } });
+    if (hm >= (settings.eveningTime || '20:00') && shown.evening !== today && (quiz > 0 || due > 0)) {
+      shown.evening = today; await idbSet('sw_reminder_shown', shown);
+      return show(quiz ? '🌙 Günün kelime sınavı' : '🔄 Tekrar zamanı', quiz ? 'Bugün öğrendiğiniz ' + quiz + ' kelimeden kısa bir sınav.' : due + ' kart tekrar bekliyor.', quiz ? 'quiz' : 'review');
+    }
+    if (hm >= (settings.morningTime || '09:00') && shown.morning !== today && settings.lastMorningNote !== today && learn > 0) {
+      shown.morning = today; await idbSet('sw_reminder_shown', shown);
+      return show('📘 Günün yeni kelimeleri hazır', Math.min(learn, settings.learnPerDay || 10) + ' yeni kelime sizi bekliyor.', 'learn');
+    }
+  })());
 });
